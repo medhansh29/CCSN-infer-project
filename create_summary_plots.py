@@ -168,6 +168,179 @@ def create_summary_plots(metrics_file: str = 'convergence_metrics.csv',
     print(f"✅ Saved: {output_dir}/overall_summary.png")
     plt.close()
     
+    # ========================================================================
+    # ADVANCED METRICS SUMMARY PLOTS
+    # ========================================================================
+    
+    # Check if advanced metrics exist
+    try:
+        adv_df = pd.read_csv('advanced_metrics.csv')
+        
+        # 5. Prediction Lead Time (L_90) Distributions
+        fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+        params = ['zams', 'mloss_rate', '56Ni']
+        titles = ['ZAMS', 'Mass-Loss Rate', '56Ni']
+        colors = ['#2ecc71', '#3498db', '#e74c3c']
+        
+        for ax, param, title, color in zip(axes, params, titles, colors):
+            lead_times = adv_df[f'{param}_L90'].dropna()
+            percent_early = adv_df[f'{param}_percent_early'].dropna()
+            
+            if len(lead_times) > 0:
+                ax.hist(lead_times, bins=15, alpha=0.7, color=color, edgecolor='black')
+                ax.axvline(lead_times.mean(), color='red', linestyle='--',
+                          label=f'Mean: {lead_times.mean():.1f} days', linewidth=2)
+                ax.axvline(lead_times.median(), color='orange', linestyle='--',
+                          label=f'Median: {lead_times.median():.1f} days', linewidth=2)
+                
+                # Add percent early info
+                ax.text(0.95, 0.95, f'Avg {percent_early.mean():.1f}% early',
+                       transform=ax.transAxes, ha='right', va='top',
+                       fontsize=11, fontweight='bold',
+                       bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+            
+            ax.set_xlabel('Prediction Lead Time (L_90 days)', fontsize=11)
+            ax.set_ylabel('Number of Objects', fontsize=11)
+            ax.set_title(f'{title}\nPrediction Lead Time Distribution', 
+                        fontsize=12, fontweight='bold')
+            ax.legend(fontsize=9)
+            ax.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(f'{output_dir}/lead_time_distributions.png', dpi=150, bbox_inches='tight')
+        print(f"✅ Saved: {output_dir}/lead_time_distributions.png")
+        plt.close()
+        
+        # 6. Degeneracy Breaking Times
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        param_pairs = [
+            ('zams', 'k_energy', 'ZAMS vs k_energy'),
+            ('zams', 'mloss_rate', 'ZAMS vs Mass-Loss'),
+            ('mloss_rate', '56Ni', 'Mass-Loss vs 56Ni')
+        ]
+        
+        t_breaks = []
+        labels = []
+        
+        for p1, p2, label in param_pairs:
+            col = f't_break_{p1}_{p2}'
+            if col in adv_df.columns:
+                breaks = adv_df[col].dropna()
+                if len(breaks) > 0:
+                    t_breaks.append(breaks)
+                    labels.append(label)
+        
+        if t_breaks:
+            positions = np.arange(len(labels))
+            bp = ax.boxplot(t_breaks, positions=positions, widths=0.6,
+                           patch_artist=True, showmeans=True,
+                           meanprops=dict(marker='D', markerfacecolor='red', markersize=8))
+            
+            for patch, color in zip(bp['boxes'], ['#2ecc71', '#3498db', '#e74c3c']):
+                patch.set_facecolor(color)
+                patch.set_alpha(0.7)
+            
+            ax.set_xticks(positions)
+            ax.set_xticklabels(labels, rotation=15, ha='right')
+            ax.set_ylabel('t_break (days since explosion)', fontsize=12)
+            ax.set_title('Parameter Degeneracy Breaking Point Distribution',
+                        fontsize=13, fontweight='bold')
+            ax.grid(True, alpha=0.3, axis='y')
+            
+            plt.tight_layout()
+            plt.savefig(f'{output_dir}/degeneracy_breaking.png', dpi=150, bbox_inches='tight')
+            print(f"✅ Saved: {output_dir}/degeneracy_breaking.png")
+            plt.close()
+        
+        # 7. Phase-Binned Residuals Comparison
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        phase_cols = ['rmse_shock_cooling', 'rmse_plateau', 'rmse_radioactive_tail']
+        phase_names = ['Shock Cooling\n(0-20 days)', 'Plateau\n(20-100 days)', 
+                      'Radioactive Tail\n(100+ days)']
+        colors_phase = ['wheat', 'lightblue', 'lightcoral']
+        
+        phase_data = []
+        valid_names = []
+        valid_colors = []
+        
+        for col, name, color in zip(phase_cols, phase_names, colors_phase):
+            if col in adv_df.columns:
+                data = adv_df[col].dropna()
+                if len(data) > 0:
+                    phase_data.append(data)
+                    valid_names.append(name)
+                    valid_colors.append(color)
+        
+        if phase_data:
+            positions = np.arange(len(valid_names))
+            bp = ax.boxplot(phase_data, positions=positions, widths=0.6,
+                           patch_artist=True, showmeans=True,
+                           meanprops=dict(marker='D', markerfacecolor='red', markersize=8))
+            
+            for patch, color in zip(bp['boxes'], valid_colors):
+                patch.set_facecolor(color)
+                patch.set_alpha(0.8)
+                patch.set_edgecolor('black')
+                patch.set_linewidth(1.5)
+            
+            ax.set_xticks(positions)
+            ax.set_xticklabels(valid_names)
+            ax.set_ylabel('RMSE (magnitudes)', fontsize=12)
+            ax.set_title('Prediction Error by SN IIP Physical Phase',
+                        fontsize=13, fontweight='bold')
+            ax.grid(True, alpha=0.3, axis='y')
+            
+            # Add annotation
+            ax.text(0.02, 0.98, 'Lower is better', transform=ax.transAxes,
+                   fontsize=10, va='top', style='italic',
+                   bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.3))
+            
+            plt.tight_layout()
+            plt.savefig(f'{output_dir}/phase_binned_errors.png', dpi=150, bbox_inches='tight')
+            print(f"✅ Saved: {output_dir}/phase_binned_errors.png")
+            plt.close()
+        
+        # 8. Lead Time vs Convergence Speed
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+        
+        # Load convergence metrics for comparison
+        conv_df = pd.read_csv('convergence_metrics.csv')
+        merged = pd.merge(conv_df, adv_df, on='object_id', how='inner')
+        
+        for ax, param, title in zip(axes, params, titles):
+            n90_col = f'{param}_n90_days'
+            l90_col = f'{param}_L90'
+            
+            if n90_col in merged.columns and l90_col in merged.columns:
+                data = merged[[n90_col, l90_col]].dropna()
+                
+                if len(data) > 0:
+                    ax.scatter(data[n90_col], data[l90_col], 
+                              alpha=0.6, s=80, edgecolors='black', linewidth=0.8)
+                    
+                    # Add trend line
+                    if len(data) > 1:
+                        z = np.polyfit(data[n90_col], data[l90_col], 1)
+                        p = np.poly1d(z)
+                        x_trend = np.linspace(data[n90_col].min(), data[n90_col].max(), 100)
+                        ax.plot(x_trend, p(x_trend), "r--", alpha=0.8, linewidth=2)
+                    
+                    ax.set_xlabel(f'Convergence Time (N_90 days)', fontsize=11)
+                    ax.set_ylabel(f'Prediction Lead Time (L_90 days)', fontsize=11)
+                    ax.set_title(f'{title}\nSpeed vs Lead Time', 
+                                fontsize=12, fontweight='bold')
+                    ax.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(f'{output_dir}/lead_time_vs_convergence.png', dpi=150, bbox_inches='tight')
+        print(f"✅ Saved: {output_dir}/lead_time_vs_convergence.png")
+        plt.close()
+        
+    except FileNotFoundError:
+        print("⚠️  Advanced metrics not found - skipping advanced summary plots")
+    
     print(f"\n✨ All summary plots created in: {output_dir}/")
 
 

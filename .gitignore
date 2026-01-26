@@ -36,12 +36,14 @@ ENV/
 
 # Generated Output Files
 convergence_metrics.csv
+advanced_metrics.csv
 object_index_summary.csv
 timeline_*.csv
 
 # Generated Plots
 summary_plots/
 convergence_plots/
+advanced_plots/
 *.png
 *.jpg
 *.jpeg
