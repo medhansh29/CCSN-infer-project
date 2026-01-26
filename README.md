@@ -372,4 +372,4 @@ pip install pandas numpy matplotlib tqdm
 
 ## Author
 
-Analysis pipeline for REFITT CCSN inference performance evaluation.
+Medhansh Garg: Purdue Physics and Astronomy
