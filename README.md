@@ -102,6 +102,84 @@ RMSE calculated separately for distinct SN IIP phases:
 
 ---
 
+## Physical Light Curve Completeness Validation
+
+> [!IMPORTANT]
+> **NEW**: The pipeline now validates light curve completeness using **physical Type IIP supernova criteria** instead of treating the last observation as "truth."
+
+### Why Completeness Matters
+
+Without validation, the analysis could show "false convergence" - parameters appear stable simply because observations ended early, not because the supernova reached a physically meaningful state.
+
+### Four Physical Criteria
+
+The completeness checker (`lightcurve_completeness.py`) implements four quantitative methods:
+
+#### 1. **Slope-Break Detection** (Plateau Drop-Off)
+
+- **Metric**: Rolling derivative of magnitude (Δmag/Δt)
+- **Trigger**: Slope exceeds 0.1 mag/day for 10+ days, then flattens
+- **Physics**: Marks end of hydrogen recombination plateau (~80-120 days)
+- **Why it matters**: Progenitor mass (M_ZAMS) is degenerate with plateau duration
+
+#### 2. **Radioactive Tail Alignment**
+
+- **Metric**: Linear fit to last 15-20 days of data
+- **Trigger**: Slope = 0.0098 ± 0.002 mag/day
+- **Physics**: Co-56 radioactive decay has immutable decay rate
+- **Why it matters**: Only phase where 56Ni mass can be accurately measured
+
+#### 3. **Phase-Window Filter**
+
+- **Categories**:
+  - Preliminary: < 70 days (too early)
+  - Transitional: 70-120 days (approaching completeness)
+  - Validated: > 120 days (mature light curve)
+- **Physics**: Progenitor properties "lock in" by late-plateau phase
+
+#### 4. **Flux Ratio Threshold**
+
+- **Metric**: Current magnitude - Peak magnitude
+- **Trigger**: ≥ 2.5 mag dimming from peak
+- **Physics**: Ensures model has seen information gain from recombination ending
+
+### Completeness Status
+
+Objects receive one of three overall statuses:
+
+| Status         | Criteria                                    | Interpretation             |
+| -------------- | ------------------------------------------- | -------------------------- |
+| **Validated**  | All criteria met OR (on tail + phase >120d) | True physical convergence  |
+| **Partial**    | Some criteria met, phase >70d               | Approaching completeness   |
+| **Incomplete** | Early phase or missing features             | May show false convergence |
+
+### How Objects Are Flagged
+
+**Example: ZTF25acfwklu**
+
+```
+Phase: 58.7 days → Status: Incomplete
+
+Physical Criteria:
+  • Plateau Drop-off: ✗ (not detected)
+  • Radioactive Tail: ✗ (slope too steep)
+  • Phase Category: Preliminary (< 70 days)
+  • Sufficient Dimming: ✗ (0.36 mag, need 2.5 mag)
+
+⚠️ WARNING: Light curve incomplete - metrics may not reflect true convergence
+```
+
+The object is flagged as **Incomplete** because:
+
+1. Phase < 70 days (Preliminary)
+2. No plateau drop-off detected
+3. Not on radioactive tail
+4. Insufficient dimming
+
+**Statistics Impact**: Only **Validated** objects contribute to summary statistics to avoid false convergence bias.
+
+---
+
 ## Analysis of Results (49 Objects, 5+ Observations)
 
 ### Key Findings
@@ -162,7 +240,25 @@ The L_90 metric demonstrates strong early prediction:
 
 ## Key Results Summary
 
-## Individual Script Usage
+## Directory Structure
+
+```
+refitt-ccsn-infer/
+├── main.py                            # Main pipeline orchestrator
+├── fetch_successive_jsons.py          # Data indexing and organization
+├── compare_successive_observations.py # Individual object analysis
+├── batch_analyze_objects.py           # Batch processing
+├── lightcurve_completeness.py         # Physical completeness validation (NEW)
+├── advanced_analysis.py               # Advanced statistical metrics
+├── batch_advanced_analysis.py         # Batch advanced analysis
+├── create_summary_plots.py            # Visualization generation
+├── convergence_metrics.csv            # Results (generated)
+├── advanced_metrics.csv               # Advanced metrics (generated)
+├── object_index_summary.csv           # Object index (generated)
+├── summary_plots/                     # Summary visualizations (generated)
+├── convergence_plots/                 # Individual trajectories (generated)
+└── advanced_plots/                    # Advanced analysis plots (generated)
+```
 
 If you need to run steps separately:
 
@@ -184,7 +280,21 @@ python3 compare_successive_observations.py --object ZTF25acfwklu --plot
 python3 batch_analyze_objects.py --min-obs 5
 ```
 
-### 4. Create Summary Plots
+### 4. Check Light Curve Completeness
+
+```bash
+python3 lightcurve_completeness.py 2026-01-21/ZTF25acfwklu_r_nn.json
+```
+
+Outputs physical completeness assessment for a single observation.
+
+### 5. Advanced Analysis (Single Object)
+
+```bash
+python3 advanced_analysis.py --object ZTF25acfwklu --output-dir advanced_plots
+```
+
+### 6. Create Summary Plots
 
 ```bash
 python3 create_summary_plots.py
@@ -196,12 +306,34 @@ python3 create_summary_plots.py
 
 Columns include:
 
-- Object identification and observation counts
-- N_90 days/phase for each parameter
+**Object Identification:**
+
+- Object ID, observation counts, phase/date ranges
+
+**Convergence Metrics (N_90):**
+
+- N_90 days/phase for each parameter (zams, mloss_rate, 56Ni)
 - Convergence success flags
 - Final parameter values
-- Volatility metrics (std, mean abs change, max jump)
-- Prediction accuracy (RMSE, MAE)
+
+**Volatility Metrics:**
+
+- Standard deviation, mean absolute change, max jump
+
+**Prediction Accuracy:**
+
+- RMSE, MAE between early and final predictions
+
+**Completeness Validation (NEW):**
+
+- `completeness_status`: Validated / Partial / Incomplete
+- `has_plateau_dropoff`: Boolean - plateau drop-off detected
+- `on_radioactive_tail`: Boolean - Co-56 decay slope confirmed
+- `phase_category`: Preliminary / Transitional / Validated
+- `sufficient_dimming`: Boolean - ≥2.5 mag from peak
+- `total_dimming_mag`: Total dimming from peak (magnitudes)
+- `tail_slope`: Measured late-time slope (mag/day)
+- `dropoff_phase`: Phase where plateau drop-off occurs (days)
 
 ### Summary Plots
 
@@ -223,13 +355,15 @@ pip install pandas numpy matplotlib tqdm
 ## Notes
 
 > [!WARNING]
-> **"Final" Observation Definition**: The analysis treats the chronologically **last available observation** in the dataset as the "final" value, NOT a physically complete supernova light curve. This means:
+> **Light Curve Completeness**: The analysis uses **physical Type IIP supernova criteria** to validate completeness, not just the last available observation. See "Physical Light Curve Completeness Validation" section above for details.
 >
-> - **N_90**: "Days to 10% convergence" is measured relative to the last observation's parameter values
-> - **L_90**: "Prediction lead time" is the time before the last observation, not before the SN physically finished
-> - **Residuals**: Calculated as difference between early and last observation predictions
+> Objects are categorized as:
 >
-> If additional observations become available later (e.g., extending the dataset beyond 2026-01-21), the "final" values will change and metrics will need to be recalculated. The assumption is that by the last observation, parameters have stabilized (validated by low volatility in most cases).
+> - **Validated**: Physically complete (plateau drop-off + sufficient phase/dimming)
+> - **Partial**: Approaching completeness (some criteria met)
+> - **Incomplete**: Early-phase or missing key features
+>
+> **Summary statistics are filtered to Validated objects only** to avoid false convergence from incomplete light curves.
 
 - Duplicate observations (same date, different filters) are handled by keeping the first
 - Objects with insufficient observations are automatically filtered

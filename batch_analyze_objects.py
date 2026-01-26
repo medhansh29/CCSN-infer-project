@@ -79,6 +79,18 @@ def batch_analyze(min_obs: int = 5, save_plots: bool = True,
                 row['mag_arr_mae'] = res.get('mae')
                 row['mag_arr_max_residual'] = res.get('max_residual')
             
+            # Add completeness information
+            if 'completeness' in report:
+                comp = report['completeness']
+                row['completeness_status'] = comp.overall_status
+                row['has_plateau_dropoff'] = comp.has_plateau_dropoff
+                row['on_radioactive_tail'] = comp.on_radioactive_tail
+                row['phase_category'] = comp.phase_category
+                row['sufficient_dimming'] = comp.sufficient_dimming
+                row['total_dimming_mag'] = comp.total_dimming_mag
+                row['tail_slope'] = comp.tail_slope
+                row['dropoff_phase'] = comp.dropoff_phase
+            
             results.append(row)
             
             # Generate plot if requested
@@ -111,6 +123,35 @@ def print_summary_stats(df: pd.DataFrame):
     print("BATCH ANALYSIS SUMMARY")
     print(f"{'='*70}")
     print(f"Total objects analyzed: {len(df)}")
+    
+    # Completeness breakdown
+    if 'completeness_status' in df.columns:
+        print(f"\n{'LIGHT CURVE COMPLETENESS BREAKDOWN':-^70}")
+        status_counts = df['completeness_status'].value_counts()
+        for status in ['Validated', 'Partial', 'Incomplete']:
+            count = status_counts.get(status, 0)
+            pct = (count / len(df)) * 100 if len(df) > 0 else 0
+            print(f"  {status:12} : {count:3} objects ({pct:5.1f}%)")
+        
+        # Show phase categories
+        if 'phase_category' in df.columns:
+            print(f"\n  Phase Categories:")
+            phase_counts = df['phase_category'].value_counts()
+            for cat in ['Validated', 'Transitional', 'Preliminary']:
+                count = phase_counts.get(cat, 0)
+                print(f"    {cat:12} : {count:3} objects")
+        
+        # Filter to validated for statistics
+        df_validated = df[df['completeness_status'] == 'Validated']
+        df_all = df.copy()
+        
+        if len(df_validated) > 0:
+            print(f"\n  ⚠️  Statistics below calculated on VALIDATED objects only ({len(df_validated)}/{len(df)})")
+            print(f"     Non-validated objects may show false convergence!")
+            df = df_validated
+        else:
+            print(f"\n  ⚠️  WARNING: No validated light curves found!")
+            print(f"     All statistics are from potentially incomplete light curves")
     
     print(f"\n{'CONVERGENCE RATES':-^70}")
     for param in ['zams', 'mloss_rate', '56Ni']:

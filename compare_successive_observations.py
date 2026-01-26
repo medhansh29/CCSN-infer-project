@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from fetch_successive_jsons import JSONFetcher
+from lightcurve_completeness import LightCurveCompletenessChecker
 
 
 class ConvergenceAnalyzer:
@@ -259,6 +260,11 @@ class ConvergenceAnalyzer:
                           self.timeline_df['date'].max()),
         }
         
+        # Check light curve completeness
+        checker = LightCurveCompletenessChecker(timeline_df=self.timeline_df)
+        completeness = checker.check_completeness()
+        report['completeness'] = completeness
+        
         # Calculate metrics for key parameters
         for param in ['zams', 'mloss_rate', '56Ni']:
             n90 = self.calculate_n90_efficiency(param)
@@ -317,6 +323,28 @@ def main():
                 print(f"  {param:12} : {n90['n90_days']:6.1f} days (Phase {n90['n90_phase']:.1f}, obs {n90['convergence_index']+1}/{n90['total_observations']})")
             else:
                 print(f"  {param:12} : Not achieved ({n90.get('reason', 'Unknown')})")
+        
+        # Print completeness assessment
+        if 'completeness' in report:
+            comp = report['completeness']
+            print(f"\n{'LIGHT CURVE COMPLETENESS':-^70}")
+            print(f"  Overall Status: {comp.overall_status}")
+            print(f"  Final Phase: {comp.final_phase:.1f} days ({comp.phase_category})")
+            print(f"  Physical Criteria:")
+            print(f"    • Plateau Drop-off: {'✓' if comp.has_plateau_dropoff else '✗'}", end='')
+            if comp.dropoff_phase:
+                print(f" (detected at {comp.dropoff_phase:.1f} days)")
+            else:
+                print()
+            print(f"    • Radioactive Tail: {'✓' if comp.on_radioactive_tail else '✗'}", end='')
+            if comp.tail_slope:
+                print(f" (slope: {comp.tail_slope:.4f} mag/day, expected: 0.0098)")
+            else:
+                print()
+            print(f"    • Sufficient Dimming: {'✓' if comp.sufficient_dimming else '✗'} ({comp.total_dimming_mag:.2f} mag)")
+            
+            if comp.overall_status != "Validated":
+                print(f"  ⚠️  WARNING: Light curve may be incomplete - metrics may not reflect true convergence")
         
         print(f"\n{'VOLATILITY (parameter stability)':-^70}")
         for param in ['zams', 'mloss_rate', '56Ni']:
