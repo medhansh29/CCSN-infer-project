@@ -12,6 +12,8 @@ from pathlib import Path
 from tqdm import tqdm
 from fetch_successive_jsons import JSONFetcher
 from compare_successive_observations import ConvergenceAnalyzer
+from lightcurve_completeness import LightCurveCompletenessChecker
+from advanced_analysis import AdvancedAnalyzer
 
 
 def batch_analyze(min_obs: int = 5, save_plots: bool = True, 
@@ -40,9 +42,27 @@ def batch_analyze(min_obs: int = 5, save_plots: bool = True,
     
     # Process each object
     results = []
+    skipped_incomplete = 0
     
     for obj_id in tqdm(sorted(multi_obs.keys()), desc="Analyzing objects"):
         try:
+            # Get timeline for this object
+            timeline = fetcher.get_object_timeline(obj_id)
+            
+            # Check completeness of final observation
+            # object_index stores: (date, filter, filepath)
+            observations = fetcher.object_index[obj_id]
+            final_obs_file = observations[-1][2]  # Get filepath from last observation
+            
+            checker = LightCurveCompletenessChecker(json_file=final_obs_file)
+            completeness_score = checker.check_completeness()
+            
+            # Skip objects with incomplete light curves
+            if completeness_score.overall_status == "Incomplete":
+                skipped_incomplete += 1
+                continue
+            
+            # Run convergence analysis
             analyzer = ConvergenceAnalyzer(obj_id, fetcher)
             report = analyzer.generate_report()
             
@@ -58,7 +78,7 @@ def batch_analyze(min_obs: int = 5, save_plots: bool = True,
             }
             
             # Add N_90 metrics
-            for param in ['zams', 'mloss_rate', '56Ni']:
+            for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v']:
                 n90 = report[f'{param}_n90']
                 row[f'{param}_n90_days'] = n90['n90_days'] if n90['convergence_achieved'] else None
                 row[f'{param}_n90_phase'] = n90['n90_phase'] if n90['convergence_achieved'] else None
@@ -66,11 +86,44 @@ def batch_analyze(min_obs: int = 5, save_plots: bool = True,
                 row[f'{param}_final'] = n90['final_value']
             
             # Add volatility metrics
-            for param in ['zams', 'mloss_rate', '56Ni']:
+            for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v']:
                 vol = report[f'{param}_volatility']
                 row[f'{param}_volatility_std'] = vol.get('volatility_std')
                 row[f'{param}_volatility_mean_abs'] = vol.get('volatility_mean_abs_change')
                 row[f'{param}_max_jump'] = vol.get('max_jump')
+
+            # --- Advanced Metrics (L_90, Lead Time) ---
+            try:
+                adv_analyzer = AdvancedAnalyzer(obj_id, fetcher)
+                
+                # 1. Prediction Lead Time for all 7 params
+                # Note: AdvancedAnalyzer might default to zams/mloss/56ni, so we call calculate_prediction_lead_time explicitly
+                for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v']:
+                    lead_res = adv_analyzer.calculate_prediction_lead_time(param)
+                    row[f'{param}_L90'] = lead_res.get('lead_time_L90')
+                    row[f'{param}_percent_early'] = lead_res.get('percent_early')
+                
+                # 2. Phase-Binned Residuals
+                res_result = adv_analyzer.calculate_binned_residuals()
+                if 'binned_rmse' in res_result:
+                    for phase_name, rmse in res_result['binned_rmse'].items():
+                        row[f'rmse_{phase_name.lower().replace(" ", "_")}'] = rmse
+                        
+                # 3. Degeneracy Breaking (t_break) for key pairs
+                # We can add more pairs now that we have more parameters
+                param_pairs = [
+                    ('zams', 'k_energy'), ('zams', 'mloss_rate'), ('mloss_rate', '56Ni'),
+                    ('beta', 'texp'), ('k_energy', 'texp')
+                ]
+                for p1, p2 in param_pairs:
+                    corr_df = adv_analyzer.calculate_rolling_correlation(p1, p2)
+                    if len(corr_df) > 0:
+                        row[f't_break_{p1}_{p2}'] = corr_df['t_break'].iloc[0]
+
+            except Exception as e:
+                # print(f"  Warning: Advanced metrics failed for {obj_id}: {e}")
+                pass
+            # ------------------------------------------
             
             # Add residual metrics
             if 'residuals' in report:
@@ -79,17 +132,14 @@ def batch_analyze(min_obs: int = 5, save_plots: bool = True,
                 row['mag_arr_mae'] = res.get('mae')
                 row['mag_arr_max_residual'] = res.get('max_residual')
             
-            # Add completeness information
-            if 'completeness' in report:
-                comp = report['completeness']
-                row['completeness_status'] = comp.overall_status
-                row['has_plateau_dropoff'] = comp.has_plateau_dropoff
-                row['on_radioactive_tail'] = comp.on_radioactive_tail
-                row['phase_category'] = comp.phase_category
-                row['sufficient_dimming'] = comp.sufficient_dimming
-                row['total_dimming_mag'] = comp.total_dimming_mag
-                row['tail_slope'] = comp.tail_slope
-                row['dropoff_phase'] = comp.dropoff_phase
+            # Add completeness information from SNCosmo checker
+            row['completeness_status'] = completeness_score.overall_status
+            row['latest_phase'] = completeness_score.latest_phase
+            row['phase_category'] = completeness_score.phase_category
+            row['fit_success'] = completeness_score.fit_success
+            row['template_name'] = completeness_score.template_name
+            row['chi_squared_reduced'] = completeness_score.chi_squared_reduced
+            row['t0_fitted'] = completeness_score.t0_fitted
             
             results.append(row)
             
@@ -107,6 +157,12 @@ def batch_analyze(min_obs: int = 5, save_plots: bool = True,
     
     # Create DataFrame
     df = pd.DataFrame(results)
+    
+    # Print summary of completeness filtering
+    print(f"\n📊 Completeness Filtering Results:")
+    print(f"  • Total objects with {min_obs}+ observations: {len(multi_obs)}")
+    print(f"  • Skipped (Incomplete light curves): {skipped_incomplete}")
+    print(f"  • Analyzed (Validated/Partial): {len(results)}")
     
     # Save to CSV
     output_file = 'convergence_metrics.csv'
@@ -154,7 +210,7 @@ def print_summary_stats(df: pd.DataFrame):
             print(f"     All statistics are from potentially incomplete light curves")
     
     print(f"\n{'CONVERGENCE RATES':-^70}")
-    for param in ['zams', 'mloss_rate', '56Ni']:
+    for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v']:
         converged = df[f'{param}_converged'].sum()
         total = len(df)
         pct = (converged / total) * 100
@@ -168,7 +224,7 @@ def print_summary_stats(df: pd.DataFrame):
             print(f"               Average N_90: {avg_n90:.1f} days (median: {median_n90:.1f})")
     
     print(f"\n{'VOLATILITY STATISTICS':-^70}")
-    for param in ['zams', 'mloss_rate', '56Ni']:
+    for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v']:
         vol_std = df[f'{param}_volatility_std'].dropna()
         if len(vol_std) > 0:
             print(f"  {param:12} : mean σ={vol_std.mean():.3f}, "

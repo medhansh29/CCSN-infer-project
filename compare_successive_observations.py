@@ -190,17 +190,36 @@ class ConvergenceAnalyzer:
         Plot parameter evolution over time.
         
         Args:
-            params: List of parameters to plot (default: ['zams', 'mloss_rate', '56Ni'])
+            params: List of parameters to plot (default: all 7 params)
             save_path: Optional path to save figure
         """
         if params is None:
-            params = ['zams', 'mloss_rate', '56Ni']
+            params = ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v']
         
-        fig, axes = plt.subplots(len(params), 1, figsize=(10, 3*len(params)))
-        if len(params) == 1:
-            axes = [axes]
+        # Determine grid size
+        n_params = len(params)
+        cols = 2
+        rows = (n_params + 1) // cols
         
-        for ax, param in zip(axes, params):
+        fig, axes = plt.subplots(rows, cols, figsize=(15, 4*rows))
+        axes = axes.flatten()
+        
+        # Parameter display names and units
+        param_labels = {
+            'zams': 'ZAMS (M_sun)',
+            'mloss_rate': 'Mass Loss Rate (M_sun/yr)',
+            '56Ni': '56Ni Mass (M_sun)',
+            'k_energy': 'Explosion Energy (10^51 erg)',
+            'beta': 'Beta (density profile)',
+            'texp': 'Explosion Time (days)',
+            'A_v': 'Extinction A_V (mag)'
+        }
+        
+        for idx, param in enumerate(params):
+            if idx >= len(axes):
+                break
+                
+            ax = axes[idx]
             data = self.timeline_df[[param, f'{param}_std', 'Phase']].dropna()
             
             if len(data) == 0:
@@ -209,14 +228,14 @@ class ConvergenceAnalyzer:
                 continue
             
             # Plot main trajectory
-            ax.plot(data['Phase'], data[param], 'o-', label=param, markersize=6)
+            ax.plot(data['Phase'], data[param], 'o-', label=param, markersize=6, color='steelblue')
             
             # Add error bars if available
             if f'{param}_std' in data.columns and not data[f'{param}_std'].isna().all():
                 ax.fill_between(data['Phase'], 
                                data[param] - data[f'{param}_std'],
                                data[param] + data[f'{param}_std'],
-                               alpha=0.3)
+                               alpha=0.3, color='lightblue')
             
             # Mark final value with horizontal line
             final_value = data[param].iloc[-1]
@@ -224,18 +243,41 @@ class ConvergenceAnalyzer:
                       alpha=0.5, label=f'Final: {final_value:.3f}')
             
             # Mark 10% tolerance band
-            ax.axhline(final_value * 1.1, color='gray', linestyle=':', alpha=0.3)
-            ax.axhline(final_value * 0.9, color='gray', linestyle=':', alpha=0.3)
-            ax.fill_between([data['Phase'].min(), data['Phase'].max()],
-                           final_value * 0.9, final_value * 1.1,
-                           color='green', alpha=0.1, label='±10% band')
+            lower_bound = final_value * 0.9
+            upper_bound = final_value * 1.1
             
-            ax.set_xlabel('Phase (days since explosion)')
-            ax.set_ylabel(param)
-            ax.set_title(f'{param} Evolution - {self.object_id}')
-            ax.legend()
+            # Identify convergence region (N_90)
+            # Find first index where all subsequent values are within 10%
+            n90_idx = None
+            for i in range(len(data)):
+                remaining = data[param].iloc[i:]
+                if all((remaining >= lower_bound) & (remaining <= upper_bound)):
+                    n90_idx = i
+                    break
+            
+            ax.axhline(upper_bound, color='gray', linestyle=':', alpha=0.3)
+            ax.axhline(lower_bound, color='gray', linestyle=':', alpha=0.3)
+            ax.fill_between([data['Phase'].min(), data['Phase'].max()],
+                           lower_bound, upper_bound,
+                           color='green', alpha=0.05, label='±10% band')
+            
+            # Mark N_90 point
+            if n90_idx is not None:
+                n90_phase = data['Phase'].iloc[n90_idx]
+                ax.axvline(n90_phase, color='orange', linestyle='-.', 
+                          alpha=0.8, label=f'N_90: {n90_phase:.1f}d')
+            
+            ax.set_xlabel('Phase (days)')
+            ax.set_ylabel(param_labels.get(param, param))
+            ax.set_title(f'{param_labels.get(param, param)}', fontweight='bold')
+            ax.legend(fontsize='small', loc='best')
             ax.grid(True, alpha=0.3)
-        
+            
+        # Hide empty subplots
+        for i in range(len(params), len(axes)):
+            axes[i].axis('off')
+            
+        plt.suptitle(f'Parameter Convergence Trajectory - {self.object_id}', fontsize=16, y=1.02)
         plt.tight_layout()
         
         if save_path:
@@ -266,7 +308,7 @@ class ConvergenceAnalyzer:
         report['completeness'] = completeness
         
         # Calculate metrics for key parameters
-        for param in ['zams', 'mloss_rate', '56Ni']:
+        for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v']:
             n90 = self.calculate_n90_efficiency(param)
             vol = self.calculate_volatility(param)
             
@@ -317,7 +359,8 @@ def main():
         print(f"Date Range: {report['date_range'][0]} to {report['date_range'][1]}")
         
         print(f"\n{'N_90 EFFICIENCY (days to 10% convergence)':-^70}")
-        for param in ['zams', 'mloss_rate', '56Ni']:
+        print(f"\n{'N_90 EFFICIENCY (days to 10% convergence)':-^70}")
+        for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v']:
             n90 = report[f'{param}_n90']
             if n90['convergence_achieved']:
                 print(f"  {param:12} : {n90['n90_days']:6.1f} days (Phase {n90['n90_phase']:.1f}, obs {n90['convergence_index']+1}/{n90['total_observations']})")
@@ -329,25 +372,19 @@ def main():
             comp = report['completeness']
             print(f"\n{'LIGHT CURVE COMPLETENESS':-^70}")
             print(f"  Overall Status: {comp.overall_status}")
-            print(f"  Final Phase: {comp.final_phase:.1f} days ({comp.phase_category})")
-            print(f"  Physical Criteria:")
-            print(f"    • Plateau Drop-off: {'✓' if comp.has_plateau_dropoff else '✗'}", end='')
-            if comp.dropoff_phase:
-                print(f" (detected at {comp.dropoff_phase:.1f} days)")
-            else:
-                print()
-            print(f"    • Radioactive Tail: {'✓' if comp.on_radioactive_tail else '✗'}", end='')
-            if comp.tail_slope:
-                print(f" (slope: {comp.tail_slope:.4f} mag/day, expected: 0.0098)")
-            else:
-                print()
-            print(f"    • Sufficient Dimming: {'✓' if comp.sufficient_dimming else '✗'} ({comp.total_dimming_mag:.2f} mag)")
+            print(f"  Latest Phase: {comp.latest_phase:.1f} days ({comp.phase_category})")
+            print(f"  SNCosmo Fit:")
+            print(f"    • Template: {comp.template_name}")
+            print(f"    • Fit Success: {'✓' if comp.fit_success else '✗'}")
+            if comp.chi_squared_reduced is not None:
+                print(f"    • Reduced χ²: {comp.chi_squared_reduced:.2f}")
+
             
             if comp.overall_status != "Validated":
                 print(f"  ⚠️  WARNING: Light curve may be incomplete - metrics may not reflect true convergence")
         
         print(f"\n{'VOLATILITY (parameter stability)':-^70}")
-        for param in ['zams', 'mloss_rate', '56Ni']:
+        for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v']:
             vol = report[f'{param}_volatility']
             if vol.get('volatility_std') is not None:
                 print(f"  {param:12} : σ={vol['volatility_std']:.3f}, "

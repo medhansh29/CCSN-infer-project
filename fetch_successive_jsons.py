@@ -75,7 +75,7 @@ class JSONFetcher:
         Get chronological timeline of observations for a specific object.
         
         Returns:
-            DataFrame with columns: date, filter, filepath, Phase, zams, mloss_rate, 56Ni
+            DataFrame with columns: date, filter, filepath, Phase, zams, mloss_rate, 56Ni, k_energy, beta, texp, A_v
         """
         if object_id not in self.object_index:
             raise ValueError(f"Object {object_id} not found in index")
@@ -94,14 +94,20 @@ class JSONFetcher:
                 'filepath': filepath,
                 'mjd': data.get('mjd'),
                 'Phase': params.get('Phase'),
-                'zams': params.get('zams', [None])[0],  # Mean value
+                'zams': params.get('zams', [None])[0],
                 'zams_std': params.get('zams', [None, None])[1] if len(params.get('zams', [])) > 1 else None,
                 'mloss_rate': params.get('mloss_rate', [None])[0],
                 'mloss_rate_std': params.get('mloss_rate', [None, None])[1] if len(params.get('mloss_rate', [])) > 1 else None,
                 '56Ni': params.get('56Ni', [None])[0],
                 '56Ni_std': params.get('56Ni', [None, None])[1] if len(params.get('56Ni', [])) > 1 else None,
                 'k_energy': params.get('k_energy', [None])[0],
+                'k_energy_std': params.get('k_energy', [None, None])[1] if len(params.get('k_energy', [])) > 1 else None,
+                'beta': params.get('beta', [None])[0],
+                'beta_std': params.get('beta', [None, None])[1] if len(params.get('beta', [])) > 1 else None,
+                'texp': params.get('texp', [None])[0],
+                'texp_std': params.get('texp', [None, None])[1] if len(params.get('texp', [])) > 1 else None,
                 'A_v': params.get('A_v', [None])[0],
+                'A_v_std': params.get('A_v', [None, None])[1] if len(params.get('A_v', [])) > 1 else None,
             })
         
         return pd.DataFrame(timeline_data)
@@ -183,6 +189,7 @@ def main():
         print(f"Example timeline for {example_id}")
         print(f"{'='*60}")
         
+        timeline = fetcher.get_object_timeline(example_id)
         timeline = fetcher.get_object_timeline(example_id)
         print(timeline[['date', 'filter', 'Phase', 'zams', 'mloss_rate', '56Ni']].to_string(index=False))
         

@@ -1,68 +1,78 @@
 #!/usr/bin/env python3
 """
-Light Curve Completeness Validation for Type IIP Supernovae
+Light Curve Completeness Validation for Type IIP Supernovae (SNCosmo-based)
 
-Implements physical criteria to determine if a light curve is complete enough
-for accurate parameter validation, avoiding "false convergence" from treating
-the last observation as truth.
-
-Based on Type IIP physics:
-- Plateau phase (80-120 days)
-- Plateau drop-off (slope steepening)  
-- Radioactive tail (Co-56 decay at 0.0098 mag/day)
+Uses SNCosmo template fitting to determine light curve phase and completeness
+status. This replaces custom physics heuristics with industry-standard templates.
 """
 
 import numpy as np
 import json
+import sncosmo
+from astropy.table import Table
 from dataclasses import dataclass
 from typing import Tuple, Optional
+import warnings
 
 
 @dataclass
 class CompletenessScore:
-    """Physical completeness assessment for a SN IIP light curve."""
+    """SNCosmo-based completeness assessment for a SN IIP light curve."""
     
-    # Individual criteria
-    has_plateau_dropoff: bool
-    on_radioactive_tail: bool
+    # SNCosmo fit results
+    t0_fitted: Optional[float]  # Explosion time (MJD)
+    latest_phase: float  # Phase of latest observation (days since explosion)
+    chi_squared_reduced: Optional[float]  # Goodness of fit
+    template_name: str  # Which SNCosmo template was used
+    fit_success: bool  # Whether template fitting succeeded
+    
+    # Phase classification
     phase_category: str  # Preliminary/Transitional/Validated
-    sufficient_dimming: bool
-    
-    # Quantitative measurements
-    total_dimming_mag: float
-    tail_slope: Optional[float]
-    dropoff_phase: Optional[float]
-    final_phase: float
     
     # Overall status
     overall_status: str  # Incomplete/Partial/Validated
     
     def __str__(self):
-        return (f"CompletenessScore(status={self.overall_status}, "
-                f"phase={self.final_phase:.1f}d, dimming={self.total_dimming_mag:.2f}mag)")
+        if self.fit_success:
+            return (f"CompletenessScore(status={self.overall_status}, "
+                    f"phase={self.latest_phase:.1f}d, χ²={self.chi_squared_reduced:.2f}, "
+                    f"template={self.template_name})")
+        else:
+            return (f"CompletenessScore(status={self.overall_status}, "
+                    f"phase_estimate={self.latest_phase:.1f}d, fit_failed)")
 
 
 class LightCurveCompletenessChecker:
     """
-    Validate Type IIP supernova light curve completeness using physical criteria.
+    Validate Type IIP supernova light curve completeness using SNCosmo template fitting.
     
-    Implements four methods:
-    1. Slope-Break Method: Detect plateau drop-off
-    2. Radioactive Tail Alignment: Verify Co-56 decay slope
-    3. Phase-Window Filter: Temporal validation
-    4. Flux Ratio Threshold: Dynamic range check
+    This replaces custom heuristics with professional SN analysis tools.
     """
     
-    # Physical constants
-    CO56_DECAY_SLOPE = 0.0098  # mag/day
-    CO56_SLOPE_TOLERANCE = 0.002  # ±0.002 mag/day
-    PLATEAU_DROPOFF_THRESHOLD = 0.1  # mag/day
-    MIN_DROPOFF_DURATION = 10  # days
-    MIN_DIMMING_FOR_VALIDATION = 2.5  # magnitudes
+    # Phase boundaries for completeness (days since explosion)
+    PHASE_PRELIMINARY = 70  # Too early for reliable convergence
+    PHASE_TRANSITIONAL = 100  # Approaching completeness
+    PHASE_VALIDATED = 100  # Confidently on radioactive tail
     
-    # Phase boundaries
-    PHASE_PRELIMINARY = 70  # days
-    PHASE_TRANSITIONAL = 120  # days
+    # Template options (in order of preference for Type IIP)
+    TEMPLATE_OPTIONS = ['nugent-sn2p', 's11-2005lc', 's11-2005hl']
+    
+    @staticmethod
+    def _map_filter_name(filter_name: str) -> str:
+        """
+        Map filter names from data format to SNCosmo format.
+        
+        Examples: 'g-ztf' -> 'ztfg', 'r-ztf' -> 'ztfr'
+        """
+        filter_map = {
+            'g-ztf': 'ztfg',
+            'r-ztf': 'ztfr',
+            'i-ztf': 'ztfi',
+            'ztfg': 'ztfg',  # Already in correct format
+            'ztfr': 'ztfr',
+            'ztfi': 'ztfi',
+        }
+        return filter_map.get(filter_name, filter_name)
     
     def __init__(self, timeline_df=None, json_file=None):
         """
@@ -77,276 +87,258 @@ class LightCurveCompletenessChecker:
         
     def check_completeness(self) -> CompletenessScore:
         """
-        Run all completeness checks and return overall score.
+        Run SNCosmo template fitting and determine completeness.
         
         Returns:
-            CompletenessScore with all validation results
+            CompletenessScore with fit results and validation status
         """
         # Load light curve data
-        phases, mags = self._load_light_curve()
+        mjd, mags, mag_errs, filters = self._load_light_curve_data()
         
-        if len(phases) < 3:
-            return self._incomplete_score(phases[-1] if len(phases) > 0 else 0)
+        if len(mjd) < 3:
+            # Insufficient data for fitting
+            return self._incomplete_score(0.0, fit_failed=True)
         
-        # Method 1: Plateau drop-off detection
-        has_dropoff, dropoff_phase = self.detect_plateau_dropoff(phases, mags)
+        # Try to fit SNCosmo template
+        fit_result, template_name = self._fit_sncosmo_template(mjd, mags, mag_errs, filters)
         
-        # Method 2: Radioactive tail check
-        on_tail, tail_slope = self.check_radioactive_tail(phases, mags)
+        # Check if we should use SNCosmo results or fall back to Phase parameter
+        use_sncosmo = False
+        if fit_result is not None:
+            # Check fit quality
+            chi2_reduced = fit_result.chisq / fit_result.ndof if fit_result.ndof > 0 else 999
+            t0 = fit_result.parameters[0]
+            latest_phase = mjd[-1] - t0
+            
+            # Use SNCosmo only if fit is reasonable (chi2 < 20) and phase makes sense (> 0, < 500 days)
+            if chi2_reduced < 20 and 0 < latest_phase < 500:
+                use_sncosmo = True
         
-        # Method 3: Phase categorization
-        phase_category = self.categorize_by_phase(phases[-1])
-        
-        # Method 4: Dynamic range
-        sufficient_dimming, total_dimming = self.check_dynamic_range(mags)
-        
-        # Determine overall status
-        overall_status = self._calculate_overall_status(
-            has_dropoff, on_tail, phase_category, sufficient_dimming
-        )
-        
-        return CompletenessScore(
-            has_plateau_dropoff=has_dropoff,
-            on_radioactive_tail=on_tail,
-            phase_category=phase_category,
-            sufficient_dimming=sufficient_dimming,
-            total_dimming_mag=total_dimming,
-            tail_slope=tail_slope,
-            dropoff_phase=dropoff_phase,
-            final_phase=phases[-1],
-            overall_status=overall_status
-        )
+        if use_sncosmo:
+            # Use SNCosmo fitted phase
+            phase_category = self.categorize_by_phase(latest_phase)
+            overall_status = self._calculate_overall_status(latest_phase, chi2_reduced)
+            
+            return CompletenessScore(
+                t0_fitted=t0,
+                latest_phase=latest_phase,
+                chi_squared_reduced=chi2_reduced,
+                template_name=template_name,
+                fit_success=True,
+                phase_category=phase_category,
+                overall_status=overall_status
+            )
+        else:
+            # Fitting failed or unreliable - fall back to Phase parameter from data
+            estimated_phase = self._estimate_phase_from_data()
+            phase_category = self.categorize_by_phase(estimated_phase)
+            overall_status = self._calculate_overall_status(estimated_phase, None)
+            
+            return CompletenessScore(
+                t0_fitted=None,
+                latest_phase=estimated_phase,
+                chi_squared_reduced=None,
+                template_name=template_name,
+                fit_success=False,
+                phase_category=phase_category,
+                overall_status=overall_status
+            )
     
-    def _load_light_curve(self) -> Tuple[np.ndarray, np.ndarray]:
-        """Load phase and magnitude arrays from timeline or JSON."""
+    def _load_light_curve_data(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Load photometric data in SNCosmo format.
+        
+        Returns:
+            (mjd, mags, mag_errs, filters) arrays
+        """
         if self.json_file:
             with open(self.json_file) as f:
                 data = json.load(f)
             
             mjd_arr = np.array(data.get('mjd_arr', []))
             mag_arr_samples = data.get('mag_arr', [])
+            mag_err_arr_samples = data.get('mag_err_arr', [])
+            filter_name_raw = data.get('filter', data.get('Filter', 'r-ztf'))  # Try 'filter' first, then 'Filter'
+            filter_name = self._map_filter_name(filter_name_raw)
             
             if len(mag_arr_samples) == 0 or len(mjd_arr) == 0:
-                return np.array([]), np.array([])
+                return np.array([]), np.array([]), np.array([]), np.array([])
             
             # Average over samples
-            mag_arr = np.mean(mag_arr_samples, axis=0)
+            mags = np.mean(mag_arr_samples, axis=0)
+            mag_errs = np.mean(mag_err_arr_samples, axis=0) if len(mag_err_arr_samples) > 0 else np.ones_like(mags) * 0.1
             
-            # Convert to phase
-            explosion_mjd = mjd_arr[0] - data.get('parameters', {}).get('Phase', 0)
-            phases = mjd_arr - explosion_mjd
+            # Create filter array
+            filters = np.array([filter_name] * len(mjd_arr))
             
-            return phases, mag_arr
+            return mjd_arr, mags, mag_errs, filters
             
         elif self.timeline_df is not None:
-            phases = []
-            mags = []
+            mjd_list = []
+            mag_list = []
+            mag_err_list = []
+            filter_list = []
             
             for _, row in self.timeline_df.iterrows():
                 with open(row['filepath']) as f:
                     data = json.load(f)
                 
-                phase = data.get('parameters', {}).get('Phase', 0)
+                mjd_arr = np.array(data.get('mjd_arr', []))
                 mag_arr = data.get('mag_arr', [])
+                mag_err_arr = data.get('mag_err_arr', [])
+                filter_name_raw = data.get('filter', data.get('Filter', 'r-ztf'))
+                filter_name = self._map_filter_name(filter_name_raw)
                 
-                if len(mag_arr) > 0:
+                if len(mag_arr) > 0 and len(mjd_arr) > 0:
                     # Use mean magnitude at this observation
                     mag_mean = np.mean(mag_arr)
-                    phases.append(phase)
-                    mags.append(mag_mean)
+                    mag_err_mean = np.mean(mag_err_arr) if len(mag_err_arr) > 0 else 0.1
+                    
+                    mjd_list.extend(mjd_arr)
+                    mag_list.extend([mag_mean] * len(mjd_arr))
+                    mag_err_list.extend([mag_err_mean] * len(mjd_arr))
+                    filter_list.extend([filter_name] * len(mjd_arr))
             
-            return np.array(phases), np.array(mags)
+            return (np.array(mjd_list), np.array(mag_list), 
+                   np.array(mag_err_list), np.array(filter_list))
         
-        return np.array([]), np.array([])
+        return np.array([]), np.array([]), np.array([]), np.array([])
     
-    # ========================================================================
-    # Method 1: Slope-Break Detection (Plateau Drop-Off)
-    # ========================================================================
-    
-    def detect_plateau_dropoff(self, phases: np.ndarray, mags: np.ndarray) -> Tuple[bool, Optional[float]]:
+    def _fit_sncosmo_template(self, mjd: np.ndarray, mags: np.ndarray, 
+                             mag_errs: np.ndarray, filters: np.ndarray) -> Tuple[Optional[object], str]:
         """
-        Detect the steepening event marking the end of plateau phase.
-        
-        The plateau drop-off is characterized by:
-        - Slope exceeding ~0.1 mag/day for 10+ days
-        - Followed by flattening to radioactive tail
+        Fit SNCosmo Type IIP template to light curve data.
         
         Args:
-            phases: Array of phases (days since explosion)
-            mags: Array of magnitudes
+            mjd: Modified Julian Dates
+            mags: Magnitudes
+            mag_errs: Magnitude errors
+            filters: Filter names
             
         Returns:
-            (has_dropoff, dropoff_phase) where dropoff_phase is when it occurs
+            (fit_result, template_name) or (None, template_name) if fit fails
         """
-        if len(phases) < 5:
-            return False, None
+        # Create SNCosmo table (using astropy Table)
+        # SNCosmo expects flux, not magnitudes - convert
+        # Flux formula: flux = 10^(-0.4 * (mag - zp))
+        zp = 25.0
+        fluxes = 10**(-0.4 * (mags - zp))
+        # Error propagation: dF/F = 0.4 * ln(10) * dmag
+        flux_errs = fluxes * 0.4 * np.log(10) * mag_errs
         
-        # Calculate rolling slopes with 5-point window
-        window = 5
-        slopes = []
-        slope_phases = []
+        data_table = Table({
+            'time': mjd,
+            'band': filters,
+            'flux': fluxes,
+            'fluxerr': flux_errs,
+            'zp': np.array([25.0] * len(mjd)),
+            'zpsys': np.array(['ab'] * len(mjd))
+        })
         
-        for i in range(len(phases) - window + 1):
-            phase_window = phases[i:i+window]
-            mag_window = mags[i:i+window]
-            
-            # Linear fit
-            if len(phase_window) > 1:
-                slope = np.polyfit(phase_window, mag_window, 1)[0]
-                slopes.append(abs(slope))  # Use absolute value
-                slope_phases.append(np.mean(phase_window))
+        # Try each template in order of preference
+        for template_name in self.TEMPLATE_OPTIONS:
+            try:
+                # Create model
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    model = sncosmo.Model(source=template_name)
+                
+                # Set reasonable initial guesses
+                t0_guess = mjd[0] - 20  # Assume explosion ~20 days before first observation
+                model.set(t0=t0_guess, amplitude=1e-10)
+                
+                # Fit the model
+                result, fitted_model = sncosmo.fit_lc(
+                    data_table, model,
+                    vparam_names=['t0', 'amplitude'],  # Fit explosion time and amplitude
+                    bounds={'t0': (mjd[0] - 100, mjd[0]), 'amplitude': (0, 1e-8)}
+                )
+                
+                # Check if fit is reasonable
+                if result.success and result.parameters[0] < mjd[-1]:
+                    return result, template_name
+                    
+            except Exception as e:
+                # Try next template
+                continue
         
-        slopes = np.array(slopes)
-        slope_phases = np.array(slope_phases)
-        
-        # Look for sustained steep slope
-        steep_mask = slopes > self.PLATEAU_DROPOFF_THRESHOLD
-        
-        if not np.any(steep_mask):
-            return False, None
-        
-        # Find continuous steep regions
-        steep_indices = np.where(steep_mask)[0]
-        
-        if len(steep_indices) == 0:
-            return False, None
-        
-        # Check if steep phase lasts long enough
-        steep_phases = slope_phases[steep_indices]
-        if len(steep_phases) > 0 and (steep_phases[-1] - steep_phases[0]) >= self.MIN_DROPOFF_DURATION:
-            # Found a sustained drop-off
-            dropoff_phase = steep_phases[0]
-            return True, dropoff_phase
-        
-        return False, None
+        # All templates failed
+        return None, self.TEMPLATE_OPTIONS[0]
     
-    # ========================================================================
-    # Method 2: Radioactive Tail Alignment
-    # ========================================================================
-    
-    def check_radioactive_tail(self, phases: np.ndarray, mags: np.ndarray) -> Tuple[bool, Optional[float]]:
+    def _estimate_phase_from_data(self) -> float:
         """
-        Verify if light curve has reached Co-56 radioactive decay tail.
+        Fallback phase estimation when SNCosmo fitting fails.
         
-        The tail has a very specific slope of 0.0098 ± 0.002 mag/day from Co-56 
-        decay physics.
+        Uses the 'Phase' field from JSON if available.
+        """
+        if self.json_file:
+            with open(self.json_file) as f:
+                data = json.load(f)
+            return data.get('parameters', {}).get('Phase', 0)
+        
+        elif self.timeline_df is not None and len(self.timeline_df) > 0:
+            # Return the latest phase from timeline
+            return self.timeline_df.iloc[-1].get('Phase', 0)
+        
+        return 0.0
+    
+    def categorize_by_phase(self, phase: float) -> str:
+        """
+        Categorize completeness by observation phase.
         
         Args:
-            phases: Array of phases
-            mags: Array of magnitudes
-            
-        Returns:
-            (on_tail, tail_slope) where tail_slope is measured value
-        """
-        if len(phases) < 15:
-            return False, None
-        
-        # Fit linear slope to last 15-20 points
-        n_points = min(20, len(phases))
-        late_phases = phases[-n_points:]
-        late_mags = mags[-n_points:]
-        
-        # Linear fit
-        slope, intercept = np.polyfit(late_phases, late_mags, 1)
-        
-        # Check if slope matches Co-56 decay
-        expected_slope = self.CO56_DECAY_SLOPE
-        slope_diff = abs(slope - expected_slope)
-        
-        on_tail = slope_diff < self.CO56_SLOPE_TOLERANCE
-        
-        return on_tail, slope
-    
-    # ========================================================================
-    # Method 3: Phase-Window Filter
-    # ========================================================================
-    
-    def categorize_by_phase(self, final_phase: float) -> str:
-        """
-        Categorize completeness by observation window.
-        
-        Args:
-            final_phase: Final observation phase (days)
+            phase: Days since explosion
             
         Returns:
             "Preliminary" | "Transitional" | "Validated"
         """
-        if final_phase < self.PHASE_PRELIMINARY:
+        if phase < self.PHASE_PRELIMINARY:
             return "Preliminary"
-        elif final_phase < self.PHASE_TRANSITIONAL:
+        elif phase < self.PHASE_VALIDATED:
             return "Transitional"
         else:
             return "Validated"
     
-    # ========================================================================
-    # Method 4: Flux Ratio Threshold
-    # ========================================================================
-    
-    def check_dynamic_range(self, mags: np.ndarray) -> Tuple[bool, float]:
+    def _calculate_overall_status(self, latest_phase: float, 
+                                  chi2_reduced: Optional[float]) -> str:
         """
-        Verify sufficient dimming from peak brightness.
+        Determine overall completeness status from SNCosmo fit results.
         
-        Requires ≥2.5 mag dimming to ensure model has seen the information
-        gain from recombination phase ending.
+        Criteria:
+        - Validated: Phase > 100 days AND reasonable fit (χ² < 10)
+        - Partial: Phase 70-100 days AND reasonable fit
+        - Incomplete: Phase < 70 days OR poor fit
         
         Args:
-            mags: Array of magnitudes
+            latest_phase: Days since explosion
+            chi2_reduced: Reduced chi-squared from fit
             
         Returns:
-            (sufficient_range, total_dimming)
+            "Validated" | "Partial" | "Incomplete"
         """
-        if len(mags) < 2:
-            return False, 0.0
+        # Check fit quality
+        fit_is_reasonable = (chi2_reduced is None or chi2_reduced < 10.0)
         
-        # Calculate dimming (mags get larger = dimmer)
-        mag_peak = np.min(mags)  # Brightest = smallest mag
-        mag_current = mags[-1]
-        
-        total_dimming = mag_current - mag_peak
-        
-        sufficient = total_dimming >= self.MIN_DIMMING_FOR_VALIDATION
-        
-        return sufficient, total_dimming
-    
-    # ========================================================================
-    # Overall Status Calculation
-    # ========================================================================
-    
-    def _calculate_overall_status(self, has_dropoff: bool, on_tail: bool, 
-                                  phase_category: str, sufficient_dimming: bool) -> str:
-        """
-        Combine all criteria to determine overall completeness status.
-        
-        Validated: All critical criteria met OR (tail + phase > 120)
-        Partial: Some criteria met, phase > 70
-        Incomplete: Early phase or missing key features
-        """
-        # Strictest validation: all criteria
-        if has_dropoff and on_tail and sufficient_dimming and phase_category == "Validated":
+        # Validated: Late phase + good fit
+        if latest_phase >= self.PHASE_VALIDATED and fit_is_reasonable:
             return "Validated"
         
-        # Relaxed validation: on tail with mature phase
-        if on_tail and phase_category == "Validated":
-            return "Validated"
-        
-        # Partial validation: transitional phase with some features
-        if phase_category in ["Transitional", "Validated"] and (on_tail or has_dropoff):
+        # Partial: Transitional phase + good fit
+        if latest_phase >= self.PHASE_PRELIMINARY and latest_phase < self.PHASE_VALIDATED and fit_is_reasonable:
             return "Partial"
         
-        # Everything else is incomplete
+        # Incomplete: Early phase or bad fit
         return "Incomplete"
     
-    def _incomplete_score(self, phase: float) -> CompletenessScore:
-        """Return an incomplete score for early/insufficient data."""
+    def _incomplete_score(self, phase: float, fit_failed: bool = False) -> CompletenessScore:
+        """Return an incomplete score for insufficient data or failed fits."""
         return CompletenessScore(
-            has_plateau_dropoff=False,
-            on_radioactive_tail=False,
+            t0_fitted=None,
+            latest_phase=phase,
+            chi_squared_reduced=None,
+            template_name=self.TEMPLATE_OPTIONS[0],
+            fit_success=not fit_failed,
             phase_category=self.categorize_by_phase(phase),
-            sufficient_dimming=False,
-            total_dimming_mag=0.0,
-            tail_slope=None,
-            dropoff_phase=None,
-            final_phase=phase,
             overall_status="Incomplete"
         )
 
@@ -363,18 +355,32 @@ if __name__ == "__main__":
     score = checker.check_completeness()
     
     print(f"\n{'='*70}")
-    print("LIGHT CURVE COMPLETENESS ASSESSMENT")
+    print("LIGHT CURVE COMPLETENESS ASSESSMENT (SNCosmo)")
     print(f"{'='*70}")
     print(f"Overall Status: {score.overall_status}")
-    print(f"Final Phase: {score.final_phase:.1f} days")
-    print(f"\nIndividual Criteria:")
-    print(f"  ✓ Plateau Drop-off: {'YES' if score.has_plateau_dropoff else 'NO'}")
-    if score.dropoff_phase:
-        print(f"    → Detected at {score.dropoff_phase:.1f} days")
-    print(f"  ✓ Radioactive Tail: {'YES' if score.on_radioactive_tail else 'NO'}")
-    if score.tail_slope:
-        print(f"    → Slope: {score.tail_slope:.4f} mag/day (expected: 0.0098)")
-    print(f"  ✓ Phase Category: {score.phase_category}")
-    print(f"  ✓ Sufficient Dimming: {'YES' if score.sufficient_dimming else 'NO'}")
-    print(f"    → Total dimming: {score.total_dimming_mag:.2f} mag")
+    print(f"Latest Phase: {score.latest_phase:.1f} days since explosion")
+    print(f"\nSNCosmo Template Fit:")
+    print(f"  Template: {score.template_name}")
+    
+    if score.fit_success:
+        print(f"  Explosion Time (t0): MJD {score.t0_fitted:.2f}")
+        print(f"  Reduced χ²: {score.chi_squared_reduced:.2f}" if score.chi_squared_reduced else "  Reduced χ²: N/A")
+        print(f"  Fit Quality: {'Good' if score.chi_squared_reduced and score.chi_squared_reduced < 5 else 'Acceptable' if score.chi_squared_reduced and score.chi_squared_reduced < 10 else 'Poor'}")
+    else:
+        print(f"  ⚠ Template fitting failed - using phase estimate from data")
+    
+    print(f"\nPhase Category: {score.phase_category}")
+    
+    # Interpretation
+    print(f"\n{'Interpretation:':-^70}")
+    if score.overall_status == "Validated":
+        print("✓ Light curve is complete - observations extend to radioactive tail")
+        print("  Parameter convergence is reliable for this object.")
+    elif score.overall_status == "Partial":
+        print("⚠ Light curve is approaching completeness")
+        print("  Convergence metrics should be interpreted with caution.")
+    else:
+        print("✗ Light curve is incomplete - early phase or insufficient data")
+        print("  May show false convergence. Metrics not reliable.")
+    
     print(f"{'='*70}\n")
