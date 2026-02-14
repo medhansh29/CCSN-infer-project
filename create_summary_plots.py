@@ -200,190 +200,14 @@ def create_summary_plots(metrics_file: str = 'convergence_metrics.csv',
     print(f"✅ Saved: {output_dir}/parameter_correlations.png")
     plt.close()
 
-    # ========================================================================
-    # 4. Lead Time Distributions (L_90)
-    # ========================================================================
-    fig, axes = plt.subplots(2, 4, figsize=(20, 10))
-    axes = axes.flatten()
-    colors = ['#2ecc71', '#3498db', '#e74c3c', '#9b59b6', '#f1c40f', '#e67e22', '#1abc9c']
 
-    for idx, (param, title) in enumerate(zip(params, titles)):
-        ax = axes[idx]
-        l90_col = f'{param}_L90'
-        
-        if l90_col in df.columns:
-            data = df[l90_col].dropna()
-            
-            if len(data) > 0:
-                ax.hist(data, bins=15, alpha=0.7, color=colors[idx % len(colors)], edgecolor='black')
-                ax.axvline(data.mean(), color='red', linestyle='--',
-                          label=f'Mean: {data.mean():.1f} d', linewidth=2)
-                ax.axvline(data.median(), color='orange', linestyle='--',
-                          label=f'Median: {data.median():.1f} d', linewidth=2)
-                
-                # Percent early
-                pct_col = f'{param}_percent_early'
-                if pct_col in df.columns:
-                    avg_early = df[pct_col].mean()
-                    ax.text(0.95, 0.95, f'Avg {avg_early:.0f}% early',
-                           transform=ax.transAxes, ha='right', va='top', fontsize=9,
-                           bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 
-            else:
-                 ax.text(0.5, 0.5, 'No Data', ha='center', va='center')
-        
-        ax.set_xlabel('Prediction Lead Time (L_90 days)', fontsize=10)
-        ax.set_ylabel('Number of Objects', fontsize=10)
-        ax.set_title(f'{title}\nLead Time', fontsize=11, fontweight='bold')
-        ax.legend(fontsize=8)
-        ax.grid(True, alpha=0.3)
-    
-    # Hide empty
-    for i in range(len(params), len(axes)):
-        axes[i].axis('off')
-
-    plt.tight_layout()
-    plt.savefig(f'{output_dir}/lead_time_distributions.png', dpi=150, bbox_inches='tight')
-    print(f"✅ Saved: {output_dir}/lead_time_distributions.png")
-    plt.close()
-
-    # ========================================================================
-    # 5. Degeneracy Breaking (t_break)
-    # ========================================================================
-    fig, ax = plt.subplots(figsize=(12, 6))
-    
-    # Define pairs to show
-    param_pairs = [
-        ('zams', 'k_energy'), ('zams', 'mloss_rate'), ('mloss_rate', '56Ni'),
-        ('beta', 'texp'), ('k_energy', 'texp')
-    ]
-    labels = [f'{p1} vs {p2}' for p1, p2 in param_pairs]
-    
-    t_breaks = []
-    valid_labels = []
-    
-    for (p1, p2), label in zip(param_pairs, labels):
-        col = f't_break_{p1}_{p2}'
-        if col in df.columns:
-            breaks = df[col].dropna()
-            if len(breaks) > 0:
-                t_breaks.append(breaks)
-                valid_labels.append(label)
-    
-    if t_breaks:
-        positions = np.arange(len(valid_labels))
-        bp = ax.boxplot(t_breaks, positions=positions, widths=0.6,
-                       patch_artist=True, showmeans=True,
-                       meanprops=dict(marker='D', markerfacecolor='red', markersize=8))
-        
-        # Color boxes
-        for patch, color in zip(bp['boxes'], plt.cm.Set3.colors):
-            patch.set_facecolor(color)
-            patch.set_alpha(0.8)
-        
-        ax.set_xticks(positions)
-        ax.set_xticklabels(valid_labels, rotation=15, ha='right', fontsize=10)
-        ax.set_ylabel('t_break (days)', fontsize=12)
-        ax.set_title('Parameter Degeneracy Breaking Times', fontsize=14, fontweight='bold')
-        ax.grid(True, alpha=0.3, axis='y')
-    else:
-        ax.text(0.5, 0.5, 'No Degeneracy Breaking Data', ha='center', va='center')
-        
-    plt.tight_layout()
-    plt.savefig(f'{output_dir}/degeneracy_breaking.png', dpi=150, bbox_inches='tight')
-    print(f"✅ Saved: {output_dir}/degeneracy_breaking.png")
-    plt.close()
-
-    # ========================================================================
-    # 6. Phase Binned Residuals
-    # ========================================================================
-    fig, ax = plt.subplots(figsize=(10, 6))
-    
-    phase_cols = ['rmse_shock_cooling', 'rmse_plateau', 'rmse_radioactive_tail']
-    phase_names = ['Shock Cooling\n(<20d)', 'Plateau\n(20-100d)', 'Radioactive Tail\n(>100d)']
-    colors_phase = ['wheat', 'lightblue', 'lightcoral']
-    
-    phase_data = []
-    valid_names = []
-    valid_colors = []
-    
-    for col, name, color in zip(phase_cols, phase_names, colors_phase):
-        if col in df.columns:
-            data = df[col].dropna()
-            if len(data) > 0:
-                phase_data.append(data)
-                valid_names.append(name)
-                valid_colors.append(color)
-    
-    if phase_data:
-        positions = np.arange(len(valid_names))
-        bp = ax.boxplot(phase_data, positions=positions, widths=0.6,
-                       patch_artist=True, showmeans=True,
-                       meanprops=dict(marker='D', markerfacecolor='red', markersize=8))
-        
-        for patch, color in zip(bp['boxes'], valid_colors):
-            patch.set_facecolor(color)
-            patch.set_alpha(0.8)
-            
-        ax.set_xticks(positions)
-        ax.set_xticklabels(valid_names, fontsize=11)
-        ax.set_ylabel('RMSE (magnitudes)', fontsize=12)
-        ax.set_title('Prediction Error by Phase', fontsize=14, fontweight='bold')
-        ax.grid(True, alpha=0.3, axis='y')
-    else:
-         ax.text(0.5, 0.5, 'No Phase RMSE Data', ha='center', va='center')
-         
-    plt.tight_layout()
-    plt.savefig(f'{output_dir}/phase_binned_errors.png', dpi=150, bbox_inches='tight')
-    print(f"✅ Saved: {output_dir}/phase_binned_errors.png")
-    plt.close()
-
-    # ========================================================================
-    # 7. Lead Time vs Convergence (Scatter)
-    # ========================================================================
-    fig, axes = plt.subplots(2, 4, figsize=(20, 10))
-    axes = axes.flatten()
-    
-    for idx, (param, title) in enumerate(zip(params, titles)):
-        ax = axes[idx]
-        n90_col = f'{param}_n90_days'
-        l90_col = f'{param}_L90'
-        
-        if n90_col in df.columns and l90_col in df.columns:
-            data = df[[n90_col, l90_col]].dropna()
-            
-            if len(data) > 0:
-                ax.scatter(data[n90_col], data[l90_col], 
-                          alpha=0.6, s=60, edgecolors='black', linewidth=0.5, c='purple')
-                
-                if len(data) > 1:
-                    try:
-                        z = np.polyfit(data[n90_col], data[l90_col], 1)
-                        p = np.poly1d(z)
-                        x_trend = np.linspace(data[n90_col].min(), data[n90_col].max(), 100)
-                        ax.plot(x_trend, p(x_trend), "r--", alpha=0.8, linewidth=2)
-                    except:
-                        pass
-        
-        ax.set_xlabel('Convergence Time (N_90)', fontsize=10)
-        ax.set_ylabel('Lead Time (L_90)', fontsize=10)
-        ax.set_title(f'{title}\nSpeed vs Lead', fontsize=11, fontweight='bold')
-        ax.grid(True, alpha=0.3)
-    
-    # Hide empty
-    for i in range(len(params), len(axes)):
-        axes[i].axis('off')
-        
-    plt.tight_layout()
-    plt.savefig(f'{output_dir}/lead_time_vs_convergence.png', dpi=150, bbox_inches='tight')
-    print(f"✅ Saved: {output_dir}/lead_time_vs_convergence.png")
-    plt.close()
     
     # ========================================================================
     # 8. Overall Performance Summary
     # ========================================================================
-    fig = plt.figure(figsize=(15, 10))
-    gs = fig.add_gridspec(3, 2, hspace=0.3, wspace=0.3)
+    fig = plt.figure(figsize=(15, 13))
+    gs = fig.add_gridspec(4, 2, hspace=0.35, wspace=0.3)
     
     short_labels = ['ZAMS', 'M_dot', '56Ni', 'Ek', 'Beta', 'T_exp', 'Av']
     
@@ -440,8 +264,35 @@ def create_summary_plots(metrics_file: str = 'convergence_metrics.csv',
     ax3.set_title('Average Parameter Volatility', fontsize=12, fontweight='bold')
     ax3.grid(True, alpha=0.3, axis='x')
     
+    # Average Relative Uncertainty (NEW)
+    ax5 = fig.add_subplot(gs[2, :])
+    unc_cols = ['zams_rel_uncertainty', 'mloss_rate_rel_uncertainty', '56Ni_rel_uncertainty',
+                'k_energy_rel_uncertainty', 'beta_rel_uncertainty', 'texp_rel_uncertainty', 
+                'A_v_rel_uncertainty']
+    avg_unc = []
+    for col in unc_cols:
+        if col in df.columns:
+            val = df[col].mean() * 100  # Convert to percentage
+            avg_unc.append(val)
+        else:
+            avg_unc.append(0)
+    
+    colors = ['#2ecc71' if u < 20 else '#f39c12' if u < 50 else '#e74c3c' for u in avg_unc]
+    bars5 = ax5.bar(short_labels, avg_unc, color=colors, edgecolor='black', linewidth=1.5, alpha=0.8)
+    ax5.axhline(y=20, color='green', linestyle='--', alpha=0.7, linewidth=1.5)
+    ax5.axhline(y=50, color='orange', linestyle='--', alpha=0.7, linewidth=1.5)
+    ax5.set_ylabel('Average Relative Uncertainty (%)', fontsize=12)
+    ax5.set_title('Average Parameter Uncertainty Across All Objects', fontsize=14, fontweight='bold')
+    ax5.set_ylim([0, max(avg_unc) * 1.2 if avg_unc else 100])
+    ax5.grid(True, alpha=0.3, axis='y')
+    
+    for bar, unc in zip(bars5, avg_unc):
+        height = bar.get_height()
+        ax5.text(bar.get_x() + bar.get_width()/2., height + 1,
+                f'{unc:.1f}%', ha='center', va='bottom', fontsize=10, fontweight='bold')
+    
     # Prediction accuracy
-    ax4 = fig.add_subplot(gs[2, :])
+    ax4 = fig.add_subplot(gs[3, :])
     if 'mag_arr_rmse' in df.columns:
         rmse_data = df['mag_arr_rmse'].dropna()
         if len(rmse_data) > 0:
@@ -461,6 +312,203 @@ def create_summary_plots(metrics_file: str = 'convergence_metrics.csv',
     plt.savefig(f'{output_dir}/overall_summary.png', dpi=150, bbox_inches='tight')
     print(f"✅ Saved: {output_dir}/overall_summary.png")
     plt.close()
+    
+    # ========================================================================
+    # 9. Confidence Grade Distribution
+    # ========================================================================
+    if 'confidence_grade' in df.columns:
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+        
+        # Pie chart of grades
+        ax1 = axes[0]
+        grade_counts = df['confidence_grade'].value_counts()
+        grade_order = ['A', 'B', 'C', 'D']
+        grade_colors = {'A': '#27ae60', 'B': '#3498db', 'C': '#f39c12', 'D': '#e74c3c'}
+        
+        sizes = [grade_counts.get(g, 0) for g in grade_order]
+        colors = [grade_colors[g] for g in grade_order]
+        labels = [f'Grade {g}\n({grade_counts.get(g, 0)})' for g in grade_order]
+        
+        # Only plot non-zero slices
+        non_zero_mask = [s > 0 for s in sizes]
+        sizes_nz = [s for s, m in zip(sizes, non_zero_mask) if m]
+        colors_nz = [c for c, m in zip(colors, non_zero_mask) if m]
+        labels_nz = [l for l, m in zip(labels, non_zero_mask) if m]
+        
+        if sizes_nz:
+            wedges, texts, autotexts = ax1.pie(sizes_nz, colors=colors_nz, labels=labels_nz,
+                                               autopct='%1.1f%%', startangle=90,
+                                               textprops={'fontsize': 11})
+            ax1.set_title('Confidence Grade Distribution', fontsize=14, fontweight='bold')
+        
+        # Histogram of confidence scores
+        ax2 = axes[1]
+        if 'confidence_score' in df.columns:
+            scores = df['confidence_score'].dropna()
+            ax2.hist(scores, bins=20, alpha=0.7, color='steelblue', edgecolor='black')
+            ax2.axvline(scores.mean(), color='red', linestyle='--', linewidth=2,
+                       label=f'Mean: {scores.mean():.2f}')
+            ax2.axvline(scores.median(), color='orange', linestyle='--', linewidth=2,
+                       label=f'Median: {scores.median():.2f}')
+            
+            # Add grade threshold lines
+            ax2.axvline(0.75, color='#27ae60', linestyle=':', linewidth=1.5, alpha=0.7)
+            ax2.axvline(0.50, color='#3498db', linestyle=':', linewidth=1.5, alpha=0.7)
+            ax2.axvline(0.25, color='#f39c12', linestyle=':', linewidth=1.5, alpha=0.7)
+            ax2.text(0.76, ax2.get_ylim()[1]*0.9, 'A', color='#27ae60', fontweight='bold')
+            ax2.text(0.51, ax2.get_ylim()[1]*0.9, 'B', color='#3498db', fontweight='bold')
+            ax2.text(0.26, ax2.get_ylim()[1]*0.9, 'C', color='#f39c12', fontweight='bold')
+            ax2.text(0.05, ax2.get_ylim()[1]*0.9, 'D', color='#e74c3c', fontweight='bold')
+            
+            ax2.set_xlabel('Confidence Score', fontsize=12)
+            ax2.set_ylabel('Number of Objects', fontsize=12)
+            ax2.set_title('Confidence Score Distribution', fontsize=14, fontweight='bold')
+            ax2.legend(fontsize=10)
+            ax2.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(f'{output_dir}/confidence_grades.png', dpi=150, bbox_inches='tight')
+        print(f"✅ Saved: {output_dir}/confidence_grades.png")
+        plt.close()
+    
+    # ========================================================================
+    # 10. Relative Uncertainty by Parameter
+    # ========================================================================
+    rel_unc_cols = [f'{p}_rel_uncertainty' for p in params]
+    if any(c in df.columns for c in rel_unc_cols):
+        fig, ax = plt.subplots(figsize=(12, 6))
+        
+        valid_cols = [c for c in rel_unc_cols if c in df.columns]
+        valid_labels = [short_labels[i] for i, c in enumerate(rel_unc_cols) if c in valid_cols]
+        
+        # Collect data for box plot
+        data = []
+        for col in valid_cols:
+            col_data = df[col].dropna()
+            # Cap at 2 for visualization (represents >200% uncertainty)
+            col_data = col_data.clip(upper=2)
+            data.append(col_data)
+        
+        if data:
+            positions = np.arange(len(valid_labels))
+            bp = ax.boxplot(data, positions=positions, widths=0.6,
+                           patch_artist=True, showmeans=True,
+                           meanprops=dict(marker='D', markerfacecolor='red', markersize=8))
+            
+            colors = plt.cm.Set2.colors
+            for patch, color in zip(bp['boxes'], colors):
+                patch.set_facecolor(color)
+                patch.set_alpha(0.8)
+            
+            ax.axhline(0.1, color='green', linestyle='--', linewidth=1.5, alpha=0.7, 
+                      label='10% uncertainty (excellent)')
+            ax.axhline(0.5, color='orange', linestyle='--', linewidth=1.5, alpha=0.7,
+                      label='50% uncertainty (poor)')
+            ax.axhline(1.0, color='red', linestyle='--', linewidth=1.5, alpha=0.7,
+                      label='100% uncertainty (unconstrained)')
+            
+            ax.set_xticks(positions)
+            ax.set_xticklabels(valid_labels, fontsize=11)
+            ax.set_ylabel('Relative Uncertainty (σ/median)', fontsize=12)
+            ax.set_title('Parameter Relative Uncertainties', fontsize=14, fontweight='bold')
+            ax.legend(loc='upper right', fontsize=9)
+            ax.grid(True, alpha=0.3, axis='y')
+        
+        plt.tight_layout()
+        plt.savefig(f'{output_dir}/relative_uncertainties.png', dpi=150, bbox_inches='tight')
+        print(f"✅ Saved: {output_dir}/relative_uncertainties.png")
+        plt.close()
+    
+    # ========================================================================
+    # 11. Confidence Components Breakdown
+    # ========================================================================
+    component_cols = ['avg_constraint_score', 'prior_posterior_contraction', 
+                      'phase_coverage_score', 'fit_quality_score']
+    if any(c in df.columns for c in component_cols):
+        fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+        axes = axes.flatten()
+        
+        titles = ['Constraint Score', 'Prior-Posterior Contraction', 
+                  'Phase Coverage', 'Fit Quality']
+        colors = ['#2ecc71', '#3498db', '#9b59b6', '#e74c3c']
+        
+        for idx, (col, title, color) in enumerate(zip(component_cols, titles, colors)):
+            ax = axes[idx]
+            if col in df.columns:
+                data = df[col].dropna()
+                if len(data) > 0:
+                    ax.hist(data, bins=20, alpha=0.7, color=color, edgecolor='black')
+                    ax.axvline(data.mean(), color='red', linestyle='--', linewidth=2,
+                              label=f'Mean: {data.mean():.2f}')
+                    ax.axvline(data.median(), color='orange', linestyle='--', linewidth=2,
+                              label=f'Median: {data.median():.2f}')
+                    
+                    ax.set_xlabel(title, fontsize=11)
+                    ax.set_ylabel('Count', fontsize=11)
+                    ax.set_title(f'{title} Distribution', fontsize=12, fontweight='bold')
+                    ax.set_xlim([0, 1])
+                    ax.legend(fontsize=9)
+                    ax.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(f'{output_dir}/confidence_components.png', dpi=150, bbox_inches='tight')
+        print(f"✅ Saved: {output_dir}/confidence_components.png")
+        plt.close()
+    
+    # ========================================================================
+    # 12. Confidence vs Data Quality
+    # ========================================================================
+    if 'confidence_score' in df.columns and 'num_observations' in df.columns:
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+        
+        # Confidence vs num observations
+        ax1 = axes[0]
+        data = df[['confidence_score', 'num_observations']].dropna()
+        if len(data) > 0:
+            ax1.scatter(data['num_observations'], data['confidence_score'],
+                       alpha=0.6, s=60, c='steelblue', edgecolors='black', linewidth=0.5)
+            if len(data) > 2:
+                try:
+                    z = np.polyfit(data['num_observations'], data['confidence_score'], 1)
+                    p = np.poly1d(z)
+                    x_trend = np.linspace(data['num_observations'].min(), 
+                                         data['num_observations'].max(), 100)
+                    ax1.plot(x_trend, p(x_trend), "r--", alpha=0.8, linewidth=2)
+                except:
+                    pass
+            ax1.set_xlabel('Number of Observations', fontsize=11)
+            ax1.set_ylabel('Confidence Score', fontsize=11)
+            ax1.set_title('Confidence vs Observation Count', fontsize=12, fontweight='bold')
+            ax1.grid(True, alpha=0.3)
+        
+        # Confidence vs phase span
+        ax2 = axes[1]
+        if 'phase_span' in df.columns:
+            data = df[['confidence_score', 'phase_span']].dropna()
+            if len(data) > 0:
+                ax2.scatter(data['phase_span'], data['confidence_score'],
+                           alpha=0.6, s=60, c='#2ecc71', edgecolors='black', linewidth=0.5)
+                ax2.set_xlabel('Phase Span (days)', fontsize=11)
+                ax2.set_ylabel('Confidence Score', fontsize=11)
+                ax2.set_title('Confidence vs Phase Coverage', fontsize=12, fontweight='bold')
+                ax2.grid(True, alpha=0.3)
+        
+        # Confidence vs posterior predictive spread
+        ax3 = axes[2]
+        if 'posterior_predictive_spread' in df.columns:
+            data = df[['confidence_score', 'posterior_predictive_spread']].dropna()
+            if len(data) > 0:
+                ax3.scatter(data['posterior_predictive_spread'], data['confidence_score'],
+                           alpha=0.6, s=60, c='#e74c3c', edgecolors='black', linewidth=0.5)
+                ax3.set_xlabel('Posterior Predictive Spread (mag)', fontsize=11)
+                ax3.set_ylabel('Confidence Score', fontsize=11)
+                ax3.set_title('Confidence vs Prediction Uncertainty', fontsize=12, fontweight='bold')
+                ax3.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(f'{output_dir}/confidence_vs_data.png', dpi=150, bbox_inches='tight')
+        print(f"✅ Saved: {output_dir}/confidence_vs_data.png")
+        plt.close()
     
     print(f"\n✨ All summary plots created in: {output_dir}/")
 

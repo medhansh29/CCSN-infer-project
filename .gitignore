@@ -34,31 +34,34 @@ ENV/
 *~
 .DS_Store
 
-# Generated Output Files
+# Credentials (NEVER commit)
+.env
+
+# Generated Output CSVs
 convergence_metrics.csv
-advanced_metrics.csv
-object_index_summary.csv
-timeline_*.csv
+uncertainty_metrics.csv
+flagged_non_iip_objects.csv
+
+# Cache files
+.tns_cache.json
 
 # Generated Plots
 summary_plots/
 convergence_plots/
-advanced_plots/
 *.png
 *.jpg
 *.jpeg
 
-# Data Directories (exclude all date directories with JSON data)
+# Data Directories (date-stamped JSON data from REFITT)
 20*/
 ZTF*.json
 *.id
-*.txt
 *.samples.txt
 
 # Logs
 *.log
 
-# Jupyter Notebooks (if any)
+# Jupyter Notebooks
 .ipynb_checkpoints/
 *.ipynb
 

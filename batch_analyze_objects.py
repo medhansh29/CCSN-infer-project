@@ -8,12 +8,15 @@ and generates summary statistics and visualizations.
 
 import argparse
 import pandas as pd
+from datetime import datetime
 from pathlib import Path
 from tqdm import tqdm
 from fetch_successive_jsons import JSONFetcher
 from compare_successive_observations import ConvergenceAnalyzer
 from lightcurve_completeness import LightCurveCompletenessChecker
-from advanced_analysis import AdvancedAnalyzer
+
+from confidence_metrics import ConfidenceMetrics
+from tns_classifier import TNSClassifier, generate_flagged_csv
 
 
 def batch_analyze(min_obs: int = 5, save_plots: bool = True, 
@@ -35,6 +38,19 @@ def batch_analyze(min_obs: int = 5, save_plots: bool = True,
     multi_obs = fetcher.get_objects_with_multiple_obs(min_obs=min_obs)
     print(f"\nFound {len(multi_obs)} objects with {min_obs}+ observations")
     
+    # --- TNS Classification Filter ---
+    print("\n🔍 Running TNS classification filter...")
+    tns_clf = TNSClassifier()
+    all_ids = sorted(multi_obs.keys())
+    class_df = tns_clf.classify_batch(all_ids)
+    flagged_ids = tns_clf.get_flagged_ids(all_ids)
+    
+    # Generate flagged objects CSV with convergence metrics
+    generate_flagged_csv(all_ids)
+    
+    print(f"  🚩 Flagged {len(flagged_ids)} non-IIP objects (excluded from analysis)")
+    # ------------------------------------
+    
     # Create plot directory if needed
     if save_plots:
         Path(plot_dir).mkdir(exist_ok=True)
@@ -43,9 +59,15 @@ def batch_analyze(min_obs: int = 5, save_plots: bool = True,
     # Process each object
     results = []
     skipped_incomplete = 0
+    skipped_classification = 0
     
     for obj_id in tqdm(sorted(multi_obs.keys()), desc="Analyzing objects"):
         try:
+            # Skip objects flagged as non-II by TNS
+            if obj_id in flagged_ids:
+                skipped_classification += 1
+                continue
+            
             # Get timeline for this object
             timeline = fetcher.get_object_timeline(obj_id)
             
@@ -92,38 +114,7 @@ def batch_analyze(min_obs: int = 5, save_plots: bool = True,
                 row[f'{param}_volatility_mean_abs'] = vol.get('volatility_mean_abs_change')
                 row[f'{param}_max_jump'] = vol.get('max_jump')
 
-            # --- Advanced Metrics (L_90, Lead Time) ---
-            try:
-                adv_analyzer = AdvancedAnalyzer(obj_id, fetcher)
-                
-                # 1. Prediction Lead Time for all 7 params
-                # Note: AdvancedAnalyzer might default to zams/mloss/56ni, so we call calculate_prediction_lead_time explicitly
-                for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v']:
-                    lead_res = adv_analyzer.calculate_prediction_lead_time(param)
-                    row[f'{param}_L90'] = lead_res.get('lead_time_L90')
-                    row[f'{param}_percent_early'] = lead_res.get('percent_early')
-                
-                # 2. Phase-Binned Residuals
-                res_result = adv_analyzer.calculate_binned_residuals()
-                if 'binned_rmse' in res_result:
-                    for phase_name, rmse in res_result['binned_rmse'].items():
-                        row[f'rmse_{phase_name.lower().replace(" ", "_")}'] = rmse
-                        
-                # 3. Degeneracy Breaking (t_break) for key pairs
-                # We can add more pairs now that we have more parameters
-                param_pairs = [
-                    ('zams', 'k_energy'), ('zams', 'mloss_rate'), ('mloss_rate', '56Ni'),
-                    ('beta', 'texp'), ('k_energy', 'texp')
-                ]
-                for p1, p2 in param_pairs:
-                    corr_df = adv_analyzer.calculate_rolling_correlation(p1, p2)
-                    if len(corr_df) > 0:
-                        row[f't_break_{p1}_{p2}'] = corr_df['t_break'].iloc[0]
 
-            except Exception as e:
-                # print(f"  Warning: Advanced metrics failed for {obj_id}: {e}")
-                pass
-            # ------------------------------------------
             
             # Add residual metrics
             if 'residuals' in report:
@@ -141,6 +132,18 @@ def batch_analyze(min_obs: int = 5, save_plots: bool = True,
             row['chi_squared_reduced'] = completeness_score.chi_squared_reduced
             row['t0_fitted'] = completeness_score.t0_fitted
             
+            # --- Confidence Metrics (raw per-parameter uncertainties) ---
+            try:
+                conf_metrics = ConfidenceMetrics(json_file=final_obs_file)
+                conf_results = conf_metrics.compute_all()
+                # Add all confidence metrics to the row
+                for key, value in conf_results.items():
+                    row[key] = value
+            except Exception as e:
+                # If confidence metrics fail, continue without them
+                pass
+            # ---------------------------
+            
             results.append(row)
             
             # Generate plot if requested
@@ -155,19 +158,103 @@ def batch_analyze(min_obs: int = 5, save_plots: bool = True,
             print(f"  Error processing {obj_id}: {str(e)}")
             continue
     
-    # Create DataFrame
+    # Create full DataFrame
     df = pd.DataFrame(results)
     
     # Print summary of completeness filtering
-    print(f"\n📊 Completeness Filtering Results:")
+    print(f"\n📊 Filtering Results:")
     print(f"  • Total objects with {min_obs}+ observations: {len(multi_obs)}")
+    print(f"  • Skipped (Non-IIP classification): {skipped_classification}")
     print(f"  • Skipped (Incomplete light curves): {skipped_incomplete}")
-    print(f"  • Analyzed (Validated/Partial): {len(results)}")
+    print(f"  • Analyzed (Clean IIP, Validated/Partial): {len(results)}")
     
-    # Save to CSV
-    output_file = 'convergence_metrics.csv'
-    df.to_csv(output_file, index=False)
-    print(f"\n✅ Saved convergence metrics to: {output_file}")
+    if len(df) == 0:
+        print("\n⚠️  No objects to analyze.")
+        return df
+    
+    # ------------------------------------------------------------------ #
+    #  Integrate frequency analysis                                       #
+    # ------------------------------------------------------------------ #
+    print("\n📈 Computing run frequency metrics...")
+    freq_rows = []
+    for obj_id in df['object_id']:
+        observations = fetcher.object_index[obj_id]
+        dates = sorted(set(obs[0] for obs in observations))
+        num_runs = len(dates)
+        filters_used = ','.join(sorted(set(obs[1] for obs in observations)))
+        
+        time_diffs = []
+        if num_runs > 1:
+            for i in range(1, len(dates)):
+                prev = datetime.strptime(dates[i-1], '%Y-%m-%d')
+                curr = datetime.strptime(dates[i], '%Y-%m-%d')
+                time_diffs.append((curr - prev).days)
+        
+        freq_rows.append({
+            'object_id': obj_id,
+            'total_runs': num_runs,
+            'first_run': dates[0] if dates else None,
+            'last_run': dates[-1] if dates else None,
+            'total_span_days': sum(time_diffs) if time_diffs else 0,
+            'avg_interval_days': sum(time_diffs) / len(time_diffs) if time_diffs else None,
+            'min_interval_days': min(time_diffs) if time_diffs else None,
+            'max_interval_days': max(time_diffs) if time_diffs else None,
+            'filters': filters_used,
+        })
+    
+    freq_df = pd.DataFrame(freq_rows)
+    df = df.merge(freq_df, on='object_id', how='left')
+    
+    # ------------------------------------------------------------------ #
+    #  Split into 3 CSVs                                                  #
+    # ------------------------------------------------------------------ #
+    
+    # --- 1. Convergence Metrics CSV ---
+    # Convergence + volatility + frequency + completeness + advanced metrics
+    convergence_cols = ['object_id']
+    # Frequency columns
+    convergence_cols += ['total_runs', 'first_run', 'last_run',
+                         'total_span_days', 'avg_interval_days',
+                         'min_interval_days', 'max_interval_days', 'filters']
+    # Basic info
+    convergence_cols += ['num_observations', 'phase_start', 'phase_end',
+                         'phase_span', 'date_start', 'date_end']
+    # Per-param convergence (n90, converged, final)
+    for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v']:
+        convergence_cols += [f'{param}_n90_days', f'{param}_n90_phase',
+                             f'{param}_converged', f'{param}_final']
+    # Per-param volatility
+    for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v']:
+        convergence_cols += [f'{param}_volatility_std',
+                             f'{param}_volatility_mean_abs', f'{param}_max_jump']
+    # Residuals and completeness
+    convergence_cols += ['mag_arr_rmse', 'mag_arr_mae', 'mag_arr_max_residual',
+                         'completeness_status', 'latest_phase',
+                         'phase_category', 'fit_success', 'template_name',
+                         'chi_squared_reduced', 't0_fitted']
+    
+    # Keep only columns that actually exist
+    convergence_cols = [c for c in convergence_cols if c in df.columns]
+    conv_df = df[convergence_cols]
+    conv_df.to_csv('convergence_metrics.csv', index=False)
+    print(f"\n✅ Saved convergence_metrics.csv ({len(conv_df)} objects, {len(convergence_cols)} columns)")
+    
+    # --- 2. Uncertainty Metrics CSV ---
+    uncertainty_cols = ['object_id']
+    for param in ['zams', 'k_energy', 'mloss_rate', 'beta', '56Ni', 'texp', 'A_v']:
+        uncertainty_cols += [f'{param}_rel_uncertainty', f'{param}_asymmetry_index']
+    uncertainty_cols += ['log_evidence', 'posterior_predictive_spread']
+    # Also include final values for context
+    for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v']:
+        uncertainty_cols.append(f'{param}_final')
+    
+    uncertainty_cols = [c for c in uncertainty_cols if c in df.columns]
+    unc_df = df[uncertainty_cols]
+    unc_df.to_csv('uncertainty_metrics.csv', index=False)
+    print(f"✅ Saved uncertainty_metrics.csv ({len(unc_df)} objects, {len(uncertainty_cols)} columns)")
+    
+    # --- 3. Flagged CSV --- (already generated by generate_flagged_csv above)
+    print(f"✅ flagged_non_iip_objects.csv (already generated)")
     
     return df
 

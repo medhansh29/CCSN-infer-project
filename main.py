@@ -21,7 +21,7 @@ from datetime import datetime
 from fetch_successive_jsons import JSONFetcher
 from batch_analyze_objects import batch_analyze, print_summary_stats
 from create_summary_plots import create_summary_plots
-from batch_advanced_analysis import batch_advanced_analysis, print_advanced_summary
+
 
 
 def print_header(text, char='='):
@@ -47,8 +47,7 @@ def main():
                        help='Directory for individual plots (default: convergence_plots)')
     parser.add_argument('--summary-dir', type=str, default='summary_plots',
                        help='Directory for summary plots (default: summary_plots)')
-    parser.add_argument('--advanced-dir', type=str, default='advanced_plots',
-                       help='Directory for advanced plots (default: advanced_plots)')
+
     
     args = parser.parse_args()
     
@@ -101,27 +100,10 @@ def main():
         sys.exit(1)
     
     # ====================================================================
-    # STEP 3: Advanced Statistical Analysis
-    # ====================================================================
-    print_header("STEP 3: Advanced Statistical Analysis", '-')
-    
-    try:
-        df_advanced = batch_advanced_analysis(
-            min_obs=args.min_obs,
-            save_plots=not args.no_plots,
-            plot_dir=args.advanced_dir
-        )
-        print(f"✅ Advanced analysis complete for {len(df_advanced)} objects")
-        
-    except Exception as e:
-        print(f"❌ Error in advanced analysis: {str(e)}")
-        print("Continuing without advanced analysis...")
-    
-    # ====================================================================
-    # STEP 4: Generate Summary Visualizations
+    # STEP 3: Generate Summary Visualizations
     # ====================================================================
     if not args.no_plots:
-        print_header("STEP 4: Generating Summary Visualizations", '-')
+        print_header("STEP 3: Generating Summary Visualizations", '-')
         
         try:
             create_summary_plots(
@@ -135,20 +117,12 @@ def main():
             print("Continuing without visualizations...")
     
     # ====================================================================
-    # STEP 5: Print Final Summary
+    # STEP 4: Print Final Summary
     # ====================================================================
-    print_header("STEP 5: Analysis Summary", '-')
+    print_header("STEP 4: Analysis Summary", '-')
     
     try:
         print_summary_stats(df)
-        
-        # Print advanced summary
-        try:
-            df_advanced = pd.read_csv('advanced_metrics.csv')
-            print_advanced_summary(df_advanced)
-        except:
-            pass
-        
     except Exception as e:
         print(f"❌ Error printing summary: {str(e)}")
     
@@ -162,14 +136,13 @@ def main():
     print(f"Finished at: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Total runtime: {duration:.2f} seconds ({duration/60:.2f} minutes)")
     print(f"\n📊 Results saved:")
-    print(f"  • convergence_metrics.csv - Full metrics for {len(df)} objects")
-    print(f"  • advanced_metrics.csv - Advanced statistical metrics")
-    print(f"  • object_index_summary.csv - Overview of all objects")
+    print(f"  • convergence_metrics.csv - Convergence + frequency metrics ({len(df)} objects)")
+    print(f"  • uncertainty_metrics.csv - Per-parameter uncertainties")
+    print(f"  • flagged_non_iip_objects.csv - TNS-flagged non-IIP objects")
     
     if not args.no_plots:
-        print(f"  • {args.summary_dir}/ - Summary visualizations (including advanced metrics)")
+        print(f"  • {args.summary_dir}/ - Summary visualizations")
         print(f"  • {args.plot_dir}/ - Individual trajectory plots")
-        print(f"  • {args.advanced_dir}/ - Advanced analysis plots")
     
     print("\n✨ Analysis pipeline completed successfully!\n")
 
