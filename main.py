@@ -17,13 +17,18 @@ import sys
 from pathlib import Path
 from datetime import datetime
 
+# Add 'src' directory to Python path so internal modules can resolve each other
+src_path = str(Path(__file__).resolve().parent / "src")
+if src_path not in sys.path:
+    sys.path.insert(0, src_path)
+
 # Import analysis modules
-from src.fetch_successive_jsons import JSONFetcher
-from src.batch_analyze_objects import batch_analyze, print_summary_stats
-from src.create_summary_plots import create_summary_plots
-from src.find_outliers import generate_scatter_outliers
-from src.red_alert import main as run_red_alerts
-from src.report_generator import main as generate_report
+from fetch_successive_jsons import JSONFetcher
+from batch_analyze_objects import batch_analyze, print_summary_stats
+from create_summary_plots import create_summary_plots
+from find_outliers import find_all_outliers
+from red_alert import main as run_red_alerts
+from report_generator import main as generate_report
 
 def print_header(text, char='='):
     """Print formatted section header."""
@@ -115,10 +120,7 @@ def main():
     print_header("STEP 4: Finding Scatter Outliers", '-')
     
     try:
-        generate_scatter_outliers(
-            metrics_file='data/convergence_metrics.csv',
-            output_file='data/scatter_outliers.csv'
-        )
+        find_all_outliers(metrics_file='data/convergence_metrics.csv')
     except Exception as e:
         print(f"❌ Error generating scatter outliers: {str(e)}")
         
