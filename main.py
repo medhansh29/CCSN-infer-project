@@ -18,11 +18,12 @@ from pathlib import Path
 from datetime import datetime
 
 # Import analysis modules
-from fetch_successive_jsons import JSONFetcher
-from batch_analyze_objects import batch_analyze, print_summary_stats
-from create_summary_plots import create_summary_plots
-
-
+from src.fetch_successive_jsons import JSONFetcher
+from src.batch_analyze_objects import batch_analyze, print_summary_stats
+from src.create_summary_plots import create_summary_plots
+from src.find_outliers import generate_scatter_outliers
+from src.red_alert import main as run_red_alerts
+from src.report_generator import main as generate_report
 
 def print_header(text, char='='):
     """Print formatted section header."""
@@ -41,12 +42,8 @@ def main():
     )
     parser.add_argument('--min-obs', type=int, default=5,
                        help='Minimum number of observations required (default: 5)')
-    parser.add_argument('--no-plots', action='store_true',
-                       help='Skip generating plots (faster for large datasets)')
-    parser.add_argument('--plot-dir', type=str, default='convergence_plots',
-                       help='Directory for individual plots (default: convergence_plots)')
-    parser.add_argument('--summary-dir', type=str, default='summary_plots',
-                       help='Directory for summary plots (default: summary_plots)')
+    parser.add_argument('--summary-dir', type=str, default='data/summary_plots',
+                       help='Directory for summary plots (default: data/summary_plots)')
 
     
     args = parser.parse_args()
@@ -56,7 +53,6 @@ def main():
     print_header("REFITT CCSN INFERENCE ANALYSIS PIPELINE")
     print(f"Started at: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Minimum observations: {args.min_obs}")
-    print(f"Generate plots: {not args.no_plots}")
     
     # ====================================================================
     # STEP 1: Index JSON Files
@@ -83,9 +79,7 @@ def main():
     
     try:
         df = batch_analyze(
-            min_obs=args.min_obs,
-            save_plots=not args.no_plots,
-            plot_dir=args.plot_dir
+            min_obs=args.min_obs
         )
         
         if len(df) == 0:
@@ -102,24 +96,62 @@ def main():
     # ====================================================================
     # STEP 3: Generate Summary Visualizations
     # ====================================================================
-    if not args.no_plots:
-        print_header("STEP 3: Generating Summary Visualizations", '-')
+    print_header("STEP 3: Generating Summary Visualizations", '-')
+    
+    try:
+        create_summary_plots(
+            metrics_file='data/convergence_metrics.csv',
+            output_dir=args.summary_dir
+        )
+        print(f"✅ Summary plots saved to: {args.summary_dir}/")
         
-        try:
-            create_summary_plots(
-                metrics_file='convergence_metrics.csv',
-                output_dir=args.summary_dir
-            )
-            print(f"✅ Summary plots saved to: {args.summary_dir}/")
-            
-        except Exception as e:
-            print(f"❌ Error generating plots: {str(e)}")
-            print("Continuing without visualizations...")
+    except Exception as e:
+        print(f"❌ Error generating plots: {str(e)}")
+        print("Continuing without visualizations...")
+
+    # ====================================================================
+    # STEP 4: Find Scattter Outliers
+    # ====================================================================
+    print_header("STEP 4: Finding Scatter Outliers", '-')
+    
+    try:
+        generate_scatter_outliers(
+            metrics_file='data/convergence_metrics.csv',
+            output_file='data/scatter_outliers.csv'
+        )
+    except Exception as e:
+        print(f"❌ Error generating scatter outliers: {str(e)}")
+        
+    # ====================================================================
+    # STEP 5: Run Integrated Anomaly Detection Engine
+    # ====================================================================
+    print_header("STEP 5: Running Anomaly Detection (Physics, ML, Percentiles)", '-')
+    
+    try:
+        # red_alert.main() handles the argument parsing if we run via CLI, 
+        # but here we can just call it (it uses argparse defaults if passed no args!)
+        # Actually it parses sys.argv. Let's patch sys.argv temporarily.
+        original_argv = sys.argv
+        sys.argv = ['red_alert.py', '--convergence', 'data/convergence_metrics.csv', '--uncertainties', 'data/uncertainty_metrics.csv', '--alerts-output', 'data/red_alerts.csv']
+        run_red_alerts()
+        sys.argv = original_argv
+    except Exception as e:
+        print(f"❌ Error running anomaly detection: {str(e)}")
+        
+    # ====================================================================
+    # STEP 6: Generate Final Diagnostic Report
+    # ====================================================================
+    print_header("STEP 6: Generating Diagnostic Report", '-')
+    
+    try:
+        generate_report()
+    except Exception as e:
+        print(f"❌ Error generating report: {str(e)}")
     
     # ====================================================================
-    # STEP 4: Print Final Summary
+    # STEP 7: Print Final Summary
     # ====================================================================
-    print_header("STEP 4: Analysis Summary", '-')
+    print_header("STEP 7: Analysis Console Summary", '-')
     
     try:
         print_summary_stats(df)
@@ -136,13 +168,12 @@ def main():
     print(f"Finished at: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Total runtime: {duration:.2f} seconds ({duration/60:.2f} minutes)")
     print(f"\n📊 Results saved:")
-    print(f"  • convergence_metrics.csv - Convergence + frequency metrics ({len(df)} objects)")
-    print(f"  • uncertainty_metrics.csv - Per-parameter uncertainties")
-    print(f"  • flagged_non_iip_objects.csv - TNS-flagged non-IIP objects")
-    
-    if not args.no_plots:
-        print(f"  • {args.summary_dir}/ - Summary visualizations")
-        print(f"  • {args.plot_dir}/ - Individual trajectory plots")
+    print(f"  • data/convergence_metrics.csv")
+    print(f"  • data/uncertainty_metrics.csv")
+    print(f"  • data/red_alerts.csv - Critical physics and ML anomalies")
+    print(f"  • data/scatter_outliers.csv - Trendline violations")
+    print(f"  • data/diagnostic_report.md - 🔥 MASTER DASHBOARD (Markdown)")
+    print(f"  • {args.summary_dir}/ - Global Plot directory")
     
     print("\n✨ Analysis pipeline completed successfully!\n")
 

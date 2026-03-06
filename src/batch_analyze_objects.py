@@ -19,15 +19,12 @@ from confidence_metrics import ConfidenceMetrics
 from tns_classifier import TNSClassifier, generate_flagged_csv
 
 
-def batch_analyze(min_obs: int = 5, save_plots: bool = True, 
-                 plot_dir: str = 'convergence_plots'):
+def batch_analyze(min_obs: int = 5):
     """
     Run convergence analysis on all objects with minimum observations.
     
     Args:
         min_obs: Minimum number of observations required
-        save_plots: Whether to save trajectory plots
-        plot_dir: Directory to save plots
     """
     # Initialize fetcher
     print("Scanning directories...")
@@ -50,11 +47,6 @@ def batch_analyze(min_obs: int = 5, save_plots: bool = True,
     
     print(f"  🚩 Flagged {len(flagged_ids)} non-IIP objects (excluded from analysis)")
     # ------------------------------------
-    
-    # Create plot directory if needed
-    if save_plots:
-        Path(plot_dir).mkdir(exist_ok=True)
-        print(f"Plots will be saved to: {plot_dir}/")
     
     # Process each object
     results = []
@@ -146,14 +138,6 @@ def batch_analyze(min_obs: int = 5, save_plots: bool = True,
             
             results.append(row)
             
-            # Generate plot if requested
-            if save_plots:
-                plot_path = f"{plot_dir}/{obj_id}_trajectory.png"
-                analyzer.plot_parameter_trajectory(save_path=plot_path)
-                # Close plot to avoid memory issues
-                import matplotlib.pyplot as plt
-                plt.close('all')
-                
         except Exception as e:
             print(f"  Error processing {obj_id}: {str(e)}")
             continue
@@ -236,8 +220,8 @@ def batch_analyze(min_obs: int = 5, save_plots: bool = True,
     # Keep only columns that actually exist
     convergence_cols = [c for c in convergence_cols if c in df.columns]
     conv_df = df[convergence_cols]
-    conv_df.to_csv('convergence_metrics.csv', index=False)
-    print(f"\n✅ Saved convergence_metrics.csv ({len(conv_df)} objects, {len(convergence_cols)} columns)")
+    conv_df.to_csv('data/convergence_metrics.csv', index=False)
+    print(f"\n✅ Saved data/convergence_metrics.csv ({len(conv_df)} objects, {len(convergence_cols)} columns)")
     
     # --- 2. Uncertainty Metrics CSV ---
     uncertainty_cols = ['object_id']
@@ -341,31 +325,23 @@ def print_summary_stats(df: pd.DataFrame):
 
 def main():
     """Main execution function."""
-    parser = argparse.ArgumentParser(
-        description='Batch analysis of convergence metrics for multiple objects'
-    )
+    parser = argparse.ArgumentParser(description='Batch process SN II-P LCs')
+    parser.add_argument('--input-dir', type=str, required=True,
+                       help='Base directory containing YYYY-MM-DD observation folders')
     parser.add_argument('--min-obs', type=int, default=5,
                        help='Minimum number of observations required (default: 5)')
-    parser.add_argument('--no-plots', action='store_true',
-                       help='Skip generating trajectory plots')
-    parser.add_argument('--plot-dir', type=str, default='convergence_plots',
-                       help='Directory to save plots (default: convergence_plots)')
     
     args = parser.parse_args()
     
     # Run batch analysis
     df = batch_analyze(
-        min_obs=args.min_obs,
-        save_plots=not args.no_plots,
-        plot_dir=args.plot_dir
+        min_obs=args.min_obs
     )
     
     # Print summary statistics
     print_summary_stats(df)
     
     print(f"Results saved to: convergence_metrics.csv")
-    if not args.no_plots:
-        print(f"Plots saved to: {args.plot_dir}/")
 
 
 if __name__ == "__main__":

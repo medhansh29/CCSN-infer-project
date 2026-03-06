@@ -7,10 +7,11 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
+import argparse
+import os
 
 
-def create_summary_plots(metrics_file: str = 'convergence_metrics.csv',
-                        output_dir: str = 'summary_plots'):
+def create_summary_plots(metrics_file: str, output_dir: str):
     """
     Create summary visualizations from convergence metrics.
     
@@ -270,9 +271,26 @@ def create_summary_plots(metrics_file: str = 'convergence_metrics.csv',
                 'k_energy_rel_uncertainty', 'beta_rel_uncertainty', 'texp_rel_uncertainty', 
                 'A_v_rel_uncertainty']
     avg_unc = []
+    
+    # Check if we can load uncertainty data since it's in a separate file
+    unc_df_path = os.path.join(os.path.dirname(metrics_file), 'uncertainty_metrics.csv')
+    unc_data_available = False
+    try:
+        if os.path.exists(unc_df_path):
+            temp_unc_df = pd.read_csv(unc_df_path)
+            unc_data_available = True
+        elif os.path.exists('data/uncertainty_metrics.csv'):
+            temp_unc_df = pd.read_csv('data/uncertainty_metrics.csv')
+            unc_data_available = True
+    except Exception:
+        pass
+
     for col in unc_cols:
-        if col in df.columns:
-            val = df[col].mean() * 100  # Convert to percentage
+        if unc_data_available and col in temp_unc_df.columns:
+            val = temp_unc_df[col].mean() * 100  # Convert to percentage
+            avg_unc.append(val)
+        elif col in df.columns:
+            val = df[col].mean() * 100
             avg_unc.append(val)
         else:
             avg_unc.append(0)
@@ -283,7 +301,8 @@ def create_summary_plots(metrics_file: str = 'convergence_metrics.csv',
     ax5.axhline(y=50, color='orange', linestyle='--', alpha=0.7, linewidth=1.5)
     ax5.set_ylabel('Average Relative Uncertainty (%)', fontsize=12)
     ax5.set_title('Average Parameter Uncertainty Across All Objects', fontsize=14, fontweight='bold')
-    ax5.set_ylim([0, max(avg_unc) * 1.2 if avg_unc else 100])
+    max_unc = max(avg_unc) if avg_unc else 0
+    ax5.set_ylim([0, max_unc * 1.2 if max_unc > 0 else 100])
     ax5.grid(True, alpha=0.3, axis='y')
     
     for bar, unc in zip(bars5, avg_unc):
@@ -309,6 +328,7 @@ def create_summary_plots(metrics_file: str = 'convergence_metrics.csv',
                   fontsize=12, fontweight='bold')
     ax4.grid(True, alpha=0.3)
     
+    plt.tight_layout()
     plt.savefig(f'{output_dir}/overall_summary.png', dpi=150, bbox_inches='tight')
     print(f"✅ Saved: {output_dir}/overall_summary.png")
     plt.close()
@@ -510,6 +530,160 @@ def create_summary_plots(metrics_file: str = 'convergence_metrics.csv',
         print(f"✅ Saved: {output_dir}/confidence_vs_data.png")
         plt.close()
     
+    # ========================================================================
+    # Parameter Correlation Scatter Grid (2×3)
+    # ========================================================================
+    # Optional: Read uncertainty metrics for scatter plots
+    unc_df = None
+    if os.path.exists('data/uncertainty_metrics.csv'):
+        unc_df = pd.read_csv('data/uncertainty_metrics.csv')
+        
+    outliers_df = None
+    if os.path.exists('data/scatter_outliers.csv'):
+        outliers_df = pd.read_csv('data/scatter_outliers.csv')
+
+    # Merge uncertainty data if available
+    if unc_df is not None:
+        merged = df.merge(unc_df[['object_id'] + [c for c in unc_df.columns if 'rel_uncertainty' in c]],
+                         on='object_id', how='left')
+    else:
+        merged = df.copy()
+
+    # Define the 6 scatter panels to match the reference figure layout
+    # Row 1: ZAMS vs (56Ni, mloss_rate, k_energy)
+    # Row 2: k_energy vs (texp, 56Ni, A_v)
+    scatter_panels = [
+        # (x_param, y_param, x_label, y_label)
+        ('56Ni_final',       'zams_final',      r'$^{56}$Ni (M$_\odot$)',           r'ZAMS (M$_\odot$)'),
+        ('mloss_rate_final', 'zams_final',      r'$-\log_{10}\dot{M}$ (M$_\odot$ yr$^{-1}$)', r'ZAMS (M$_\odot$)'),
+        ('k_energy_final',   'zams_final',      r'$E_k$ ($10^{51}$ erg)',           r'ZAMS (M$_\odot$)'),
+        ('texp_final',       'k_energy_final',  r'$t_{\mathrm{exp}}$ (day)',        r'$E_k$ ($10^{51}$ erg)'),
+        ('56Ni_final',       'k_energy_final',  r'$^{56}$Ni (M$_\odot$)',           r'$E_k$ ($10^{51}$ erg)'),
+        ('A_v_final',        'k_energy_final',  r'$A_V$ (mag)',                     r'$E_k$ ($10^{51}$ erg)'),
+    ]
+
+    # REFITT parameter bounds (dashed reference lines)
+    param_bounds = {
+        'zams_final':      (9.0, 17.0),
+        'k_energy_final':  (0.1, 5.0),
+        '56Ni_final':      (0.001, 0.3),
+        'mloss_rate_final': (0.0, 5.0),
+        'texp_final':      (0.0, None),
+        'A_v_final':       (0.0, None),
+    }
+
+    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+    marker_color = '#e74c71'   # Pink-red like the reference
+    edge_color = '#8b0000'
+
+    # Try to load outliers
+    try:
+        outliers_df = pd.read_csv('scatter_outliers.csv')
+    except Exception:
+        outliers_df = None
+
+    for idx, (x_col, y_col, x_label, y_label) in enumerate(scatter_panels):
+        row, col_idx = divmod(idx, 3)
+        ax = axes[row][col_idx]
+
+        if x_col in merged.columns and y_col in merged.columns:
+            plot_data = merged[[x_col, y_col, 'object_id']].dropna()
+
+            if len(plot_data) > 0:
+                x_vals = plot_data[x_col].values
+                y_vals = plot_data[y_col].values
+
+                # Plot line of best fit to give visual reference to outliers
+                if len(x_vals) > 1:
+                    m, c = np.polyfit(x_vals, y_vals, 1)
+                    x_trend = np.linspace(min(x_vals), max(x_vals), 100)
+                    ax.plot(x_trend, m * x_trend + c, "c--", alpha=0.6, linewidth=1.5, zorder=2)
+
+                x_param = x_col.replace('_final', '')
+                y_param = y_col.replace('_final', '')
+                x_err_col = f'{x_param}_rel_uncertainty'
+                y_err_col = f'{y_param}_rel_uncertainty'
+
+                # Are there outliers for this panel?
+                panel_outliers = pd.DataFrame()
+                if outliers_df is not None:
+                    panel_outliers = outliers_df[(outliers_df['x_param_name'] == x_col) & (outliers_df['y_param_name'] == y_col)]
+                
+                outlier_oids = panel_outliers['object_id'].tolist() if not panel_outliers.empty else []
+
+                # Plot regular points (non-outliers)
+                mask_regular = ~plot_data['object_id'].isin(outlier_oids)
+                if mask_regular.any():
+                    reg_data = plot_data[mask_regular]
+                    reg_idx = plot_data.index[mask_regular]
+                    
+                    reg_x_err = np.abs(reg_data[x_col].values) * np.nan_to_num(merged.loc[reg_idx, x_err_col].values, nan=0) if x_err_col in merged.columns else None
+                    reg_y_err = np.abs(reg_data[y_col].values) * np.nan_to_num(merged.loc[reg_idx, y_err_col].values, nan=0) if y_err_col in merged.columns else None
+                    
+                    ax.errorbar(reg_data[x_col].values, reg_data[y_col].values,
+                               xerr=reg_x_err, yerr=reg_y_err,
+                               fmt='o', markersize=7,
+                               color=marker_color, ecolor='gray',
+                               elinewidth=0.7, capsize=0,
+                               markeredgecolor=edge_color, markeredgewidth=0.5,
+                               alpha=0.75, zorder=5)
+
+                # Plot outliers
+                if not panel_outliers.empty:
+                    # Use a colormap to give each outlier a unique color
+                    colors = plt.cm.tab10(np.linspace(0, 1, len(panel_outliers)))
+                    
+                    for i, (_, out_row) in enumerate(panel_outliers.iterrows()):
+                        oid = out_row['object_id']
+                        x_val = out_row['x_param_value']
+                        y_val = out_row['y_param_value']
+                        dir_val = out_row['direction']
+                        
+                        out_idx = plot_data[plot_data['object_id'] == oid].index
+                        if not out_idx.empty:
+                            x_e = np.abs(x_val) * np.nan_to_num(merged.loc[out_idx, x_err_col].values[0], nan=0) if x_err_col in merged.columns else None
+                            y_e = np.abs(y_val) * np.nan_to_num(merged.loc[out_idx, y_err_col].values[0], nan=0) if y_err_col in merged.columns else None
+                            
+                            ax.errorbar([x_val], [y_val],
+                                       xerr=[x_e] if x_e is not None else None, 
+                                       yerr=[y_e] if y_e is not None else None,
+                                       fmt='D', markersize=8,
+                                       color=colors[i], ecolor='gray',
+                                       elinewidth=1.0, capsize=0,
+                                       markeredgecolor='black', markeredgewidth=1.0,
+                                       alpha=1.0, zorder=10, label=f"{oid} ({dir_val})")
+
+                    ax.legend(fontsize=8, loc='best')
+
+                # Add parameter bounds as dashed lines
+                for param_col, bounds in param_bounds.items():
+                    if param_col == y_col:
+                        for b in bounds:
+                            if b is not None:
+                                ax.axhline(y=b, color='gray', linestyle='--',
+                                          linewidth=0.8, alpha=0.5, zorder=1)
+                    if param_col == x_col:
+                        for b in bounds:
+                            if b is not None:
+                                ax.axvline(x=b, color='gray', linestyle='--',
+                                          linewidth=0.8, alpha=0.5, zorder=1)
+
+        ax.set_xlabel(x_label, fontsize=13)
+        ax.set_ylabel(y_label, fontsize=13)
+        ax.tick_params(axis='both', labelsize=11)
+        ax.grid(True, alpha=0.15, linewidth=0.5)
+
+        # Minor ticks
+        ax.minorticks_on()
+        ax.tick_params(which='minor', length=3)
+
+    plt.suptitle('Parameter Correlations — Final Inferred Values',
+                fontsize=16, fontweight='bold', y=1.01)
+    plt.tight_layout()
+    plt.savefig(f'{output_dir}/parameter_scatter_grid.png', dpi=200, bbox_inches='tight')
+    print(f"✅ Saved: {output_dir}/parameter_scatter_grid.png")
+    plt.close()
+
     print(f"\n✨ All summary plots created in: {output_dir}/")
 
 if __name__ == "__main__":

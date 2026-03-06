@@ -13,7 +13,8 @@ REFITT produces daily inference outputs for active ZTF transients, each containi
 3. **Validates** light curve completeness based on the model's Phase parameter
 4. **Computes** convergence metrics (N₉₀, volatility), prediction residuals, and parameter uncertainties
 5. **Generates** per-object trajectory plots and batch summary visualizations
-6. **Outputs** three structured CSVs for downstream analysis and plotting
+6. **Detects** mathematical and physical anomalies (ML & Rule-based alerts)
+7. **Compiles** a comprehensive PDF diagnostic report of all outputs
 
 ---
 
@@ -79,12 +80,14 @@ Each JSON file contains REFITT's posterior parameter estimates for one object in
 python3 main.py
 ```
 
-This runs 4 steps in sequence:
+This sequentially executes all pipeline modules:
 
 1. **Index** — Scans all date directories and indexes JSON files by ZTF object ID
 2. **Analyze** — TNS classification filtering → light curve completeness → convergence metrics → CSV output
-3. **Visualize** — Generates summary plots from `convergence_metrics.csv`
-4. **Report** — Prints a comprehensive terminal summary
+3. **Visualize** — Generates summary plots from `data/convergence_metrics.csv`
+4. **Scatter Outliers** — Detects trendline deviations from parameter distributions
+5. **Anomaly Detection** — Uses physics constraints and Isolation Forests to flag weird fits
+6. **Report Generation** — Converts all CSV metrics and plot images into a clean PDF `data/diagnostic_report.pdf`
 
 ### CLI Options
 
@@ -127,15 +130,7 @@ python3 batch_analyze_objects.py --no-plots
 ```
 refitt-ccsn-infer/
 │
-├── main.py                            # CLI entrypoint — runs the complete 4-step pipeline
-├── batch_analyze_objects.py           # Main orchestrator — filtering, analysis, CSV output
-├── fetch_successive_jsons.py          # Indexes JSON files by ZTF object ID across dates
-├── compare_successive_observations.py # Per-object convergence: N₉₀, volatility, residuals
-├── lightcurve_completeness.py         # Light curve completeness validation via Phase
-├── confidence_metrics.py              # Posterior uncertainties from final JSON observation
-├── tns_classifier.py                  # TNS API queries for spectroscopic classification
-├── create_summary_plots.py            # Batch summary visualizations
-│
+├── main.py                            # CLI entrypoint — runs the complete 7-step pipeline
 ├── .env.example                       # Template for TNS credentials (committed)
 ├── .env                               # Actual TNS credentials (NOT committed — gitignored)
 ├── .tns_cache.json                    # Cached TNS API responses (auto-generated, gitignored)
@@ -143,12 +138,28 @@ refitt-ccsn-infer/
 ├── requirements.txt                   # Python dependencies
 ├── README.md                          # This file
 │
-├── convergence_metrics.csv            # OUTPUT: convergence + frequency metrics
-├── uncertainty_metrics.csv            # OUTPUT: per-parameter posterior uncertainties
-├── flagged_non_iip_objects.csv        # OUTPUT: objects excluded by TNS classification
+├── src/                               # SOURCE CODE DIRECTORY
+│   ├── batch_analyze_objects.py       # Main orchestrator — filtering, analysis, CSV output
+│   ├── fetch_successive_jsons.py      # Indexes JSON files by ZTF object ID across dates
+│   ├── compare_successive_observations.py # Per-object convergence: N₉₀, volatility, residuals
+│   ├── lightcurve_completeness.py     # Light curve completeness validation via Phase
+│   ├── confidence_metrics.py          # Posterior uncertainties from final JSON observation
+│   ├── tns_classifier.py              # TNS API queries for spectroscopic classification
+│   ├── create_summary_plots.py        # Batch summary visualizations
+│   ├── find_outliers.py               # Identifies 2D scatter trendline outliers
+│   ├── red_alert.py                   # Physics anomaly & ML (Isolation Forest) flagging
+│   └── report_generator.py            # Compiles data into the diagnostic PDF report
+│
+├── data/                              # PIPELINE OUTPUT DIRECTORY
+│   ├── convergence_metrics.csv        # OUTPUT: convergence + frequency metrics
+│   ├── uncertainty_metrics.csv        # OUTPUT: per-parameter posterior uncertainties
+│   ├── flagged_non_iip_objects.csv    # OUTPUT: objects excluded by TNS classification
+│   ├── red_alerts.csv                 # OUTPUT: rule-based and ML flagged anomalies
+│   ├── scatter_outliers.csv           # OUTPUT: 2D trendline outliers
+│   ├── diagnostic_report.pdf          # OUTPUT: auto-generated summary report
+│   └── summary_plots/                 # OUTPUT: batch-level summary visualizations
 │
 ├── convergence_plots/                 # OUTPUT: per-object trajectory plots
-├── summary_plots/                     # OUTPUT: batch-level summary visualizations
 │
 ├── 2025-10-31/                        # DATA: date-stamped REFITT JSON directories
 ├── 2025-11-01/                        #   Each contains ZTF*.json files
@@ -160,7 +171,7 @@ refitt-ccsn-infer/
 
 ## Pipeline Output
 
-The pipeline produces **three CSVs** and two optional plot directories.
+The pipeline produces **five CSVs**, a PDF report, and two optional plot directories.
 
 ### 1. `convergence_metrics.csv`
 
@@ -200,12 +211,32 @@ Objects excluded from analysis because their TNS spectroscopic type is not SN II
 | `tns_type`    | Spectroscopic type (SN IIn, SN IIb, etc.)   |
 | `flag_reason` | Human-readable reason for exclusion         |
 
+### 4. `red_alerts.csv`
+
+Anomaly flags generated via physical rule constraints and Isolation Forest ML.
+
+| Column           | Description                                             |
+| :--------------- | :------------------------------------------------------ |
+| `object_id`      | ZTF object ID                                           |
+| `alert_reason`   | Human-readable explanation of why this was flagged      |
+| `severity_score` | 3 (Physics), 2 (Machine Learning), 1 (Statistical Skew) |
+
+### 5. `scatter_outliers.csv`
+
+Objects strongly deviating (>1.5σ) from typical linear distributions (e.g. ZAMS vs Ni56).
+
+| Column                          | Description                          |
+| :------------------------------ | :----------------------------------- |
+| `object_id`                     | ZTF object ID                        |
+| `x_param_name` / `y_param_name` | The variables being cross-referenced |
+| `direction`                     | E.g. "Below predicted trendline"     |
+
 ### Plot Directories
 
-| Directory            | Contents                                                                                                                                                      |
-| :------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `convergence_plots/` | Per-object parameter trajectory plots — 7 parameters over time with N₉₀ markers                                                                               |
-| `summary_plots/`     | Batch-level visualizations: convergence distributions, volatility box plots, parameter correlations, overall performance dashboard, object stability rankings |
+| Directory             | Contents                                                                                                                                                      |
+| :-------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `convergence_plots/`  | Per-object parameter trajectory plots — 7 parameters over time with N₉₀ markers                                                                               |
+| `data/summary_plots/` | Batch-level visualizations: convergence distributions, volatility box plots, parameter correlations, overall performance dashboard, object stability rankings |
 
 ---
 
@@ -244,11 +275,24 @@ Date directories (2025-10-31/, 2025-11-01/, ...)
                │
                ▼
     ┌──────────────────────────────────────────────┐
-    │              3 Output CSVs                    │
-    │  • convergence_metrics.csv                    │
-    │  • uncertainty_metrics.csv                    │
-    │  • flagged_non_iip_objects.csv                │
-    └──────────────────────────────────────────────┘
+    │                Data Outputs                  │
+    │  • convergence_metrics.csv                   │
+    │  • uncertainty_metrics.csv                   │
+    │  • flagged_non_iip_objects.csv               │
+    └──────────┬───────────────────────────────────┘
+               │
+               ▼
+    ┌──────────────────────────┐
+    │   Anomaly Detection      │  (red_alert.py, find_outliers.py)
+    └──────────┬───────────────┘
+               │
+               ▼
+    ┌──────────────────────────┐
+    │   Report Generation      │  (report_generator.py)
+    └──────────┬───────────────┘
+               │
+               ▼
+      data/diagnostic_report.pdf
 ```
 
 ---
@@ -283,15 +327,15 @@ From the posterior: `(upper_err + lower_err) / (2 × |median|)`. Values <0.1 ind
 
 CLI entrypoint. Runs the complete 4-step pipeline: index → analyze → visualize → report. All steps are orchestrated here with error handling and timing.
 
-### `batch_analyze_objects.py`
+### `src/batch_analyze_objects.py`
 
 The main orchestrator. For each object: loads data via `JSONFetcher`, runs TNS filtering, checks light curve completeness, computes convergence metrics, extracts uncertainties, computes run frequency, and writes all three CSVs. Also generates per-object trajectory plots.
 
-### `fetch_successive_jsons.py`
+### `src/fetch_successive_jsons.py`
 
 Scans all `YYYY-MM-DD/` directories for `ZTF*.json` files. Builds an index mapping each ZTF object ID to its chronological list of observations. Provides the `JSONFetcher` class used by all other modules.
 
-### `compare_successive_observations.py`
+### `src/compare_successive_observations.py`
 
 Core convergence analyzer. For each object, it:
 
@@ -300,30 +344,30 @@ Core convergence analyzer. For each object, it:
 3. Computes N₉₀ (days to convergence), volatility metrics, and inter-observation residuals
 4. Generates multi-panel trajectory plots
 
-**Standalone**: `python3 compare_successive_observations.py --object ZTF25abfuicb`
+**Standalone**: `python3 src/compare_successive_observations.py --object ZTF25abfuicb`
 
-### `lightcurve_completeness.py`
+### `src/lightcurve_completeness.py`
 
 Validates light curve completeness using the model's Phase parameter. Classifies objects as Validated (≥100d, on radioactive tail), Partial (70–100d, plateau), or Incomplete (<70d, early). Objects with Phase <70d are excluded from analysis.
 
-**Standalone**: `python3 lightcurve_completeness.py <json_file>`
+**Standalone**: `python3 src/lightcurve_completeness.py <json_file>`
 
-### `confidence_metrics.py`
+### `src/confidence_metrics.py`
 
 Extracts posterior uncertainties from a single JSON observation file. Computes relative uncertainty, asymmetry index, log evidence, and posterior predictive spread for all 7 parameters.
 
-**Standalone**: `python3 confidence_metrics.py <json_file>`
+**Standalone**: `python3 src/confidence_metrics.py <json_file>`
 
-### `tns_classifier.py`
+### `src/tns_classifier.py`
 
 Queries the [Transient Name Server](https://www.wis-tns.org/) for official spectroscopic classifications. Only objects classified as **SN II** or **SN IIP** pass through; all others are flagged and excluded. Results are cached in `.tns_cache.json` — subsequent runs make zero API calls.
 
 - **Rate limiting**: 1 request/second (TNS requirement)
-- **Standalone**: `python3 tns_classifier.py`
+- **Standalone**: `python3 src/tns_classifier.py`
 
-### `create_summary_plots.py`
+### `src/create_summary_plots.py`
 
-Generates batch visualizations from `convergence_metrics.csv`:
+Generates batch visualizations from `data/convergence_metrics.csv`:
 
 - Convergence time distributions (N₉₀ histograms per parameter)
 - Volatility comparisons (box plots across parameters)
@@ -331,7 +375,15 @@ Generates batch visualizations from `convergence_metrics.csv`:
 - Overall performance summary (combined dashboard)
 - Object stability rankings
 
-**Standalone**: `python3 create_summary_plots.py`
+**Standalone**: `python3 src/create_summary_plots.py`
+
+### `src/red_alert.py`
+
+Flags mathematically and physically anomalous fits. Uses hard physical bounds (e.g. Explosion Energy to Ejecta Mass ratio) and an Isolation Forest to flag objects holding out-of-distribution values but exhibiting paradoxically high confidence scores.
+
+### `src/report_generator.py`
+
+Ingests all downstream outputs (metrics, anomalies, outliers, TNS tags) into a Markdown template and compiles a comprehensive, styled PDF `diagnostic_report.pdf` presenting overall pipeline health alongside specific flags. Outputs to `data/`.
 
 ---
 

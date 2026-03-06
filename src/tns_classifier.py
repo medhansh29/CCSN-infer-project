@@ -243,8 +243,8 @@ class TNSClassifier:
 
 
 def generate_flagged_csv(object_ids: List[str],
-                         convergence_csv: str = 'convergence_metrics.csv',
-                         output_csv: str = 'flagged_non_iip_objects.csv'):
+                         convergence_csv: str = 'data/convergence_metrics.csv',
+                         output_csv: str = 'data/flagged_non_iip_objects.csv'):
     """
     Classify all objects via TNS, merge with convergence metrics,
     and save a CSV of flagged (non-IIP) objects.
@@ -299,12 +299,12 @@ if __name__ == '__main__':
         description='Classify ZTF objects via TNS and flag non-II types'
     )
     parser.add_argument('--output', type=str,
-                        default='flagged_non_iip_objects.csv',
+                        default='data/flagged_non_iip_objects.csv',
                         help='Output CSV for flagged objects')
     args = parser.parse_args()
 
     # Gather object IDs from the JSON fetcher
-    from fetch_successive_jsons import JSONFetcher
+    from src.fetch_successive_jsons import JSONFetcher
     fetcher = JSONFetcher()
     fetcher.scan_directories()
     all_ids = fetcher.get_all_object_ids()

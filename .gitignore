@@ -37,10 +37,14 @@ ENV/
 # Credentials (NEVER commit)
 .env
 
-# Generated Output CSVs
+# Generated Pipeline Outputs
+data/
 convergence_metrics.csv
 uncertainty_metrics.csv
 flagged_non_iip_objects.csv
+red_alerts.csv
+scatter_outliers.csv
+ml_anomalies.csv
 
 # Cache files
 .tns_cache.json
@@ -51,6 +55,8 @@ convergence_plots/
 *.png
 *.jpg
 *.jpeg
+*.pdf
+TL;DR_ Report Generation.md
 
 # Data Directories (date-stamped JSON data from REFITT)
 20*/
