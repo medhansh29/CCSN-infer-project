@@ -22,6 +22,18 @@ def create_summary_plots(metrics_file: str, output_dir: str):
     # Load data
     try:
         df = pd.read_csv(metrics_file)
+        
+        # Merge uncertainty data if available so that plots dependent on it trigger
+        unc_df_path = os.path.join(os.path.dirname(metrics_file), 'uncertainty_metrics.csv')
+        if not os.path.exists(unc_df_path) and os.path.exists('data/uncertainty_metrics.csv'):
+            unc_df_path = 'data/uncertainty_metrics.csv'
+            
+        if os.path.exists(unc_df_path):
+            unc_df = pd.read_csv(unc_df_path)
+            # Only merge columns that don't already exist to avoid _x/_y suffixes
+            merge_cols = ['object_id'] + [c for c in unc_df.columns if c not in df.columns]
+            df = df.merge(unc_df[merge_cols], on='object_id', how='left')
+            
     except FileNotFoundError:
         print(f"Error: {metrics_file} not found. Run batch_analyze_objects.py first.")
         return
@@ -272,25 +284,9 @@ def create_summary_plots(metrics_file: str, output_dir: str):
                 'A_v_rel_uncertainty']
     avg_unc = []
     
-    # Check if we can load uncertainty data since it's in a separate file
-    unc_df_path = os.path.join(os.path.dirname(metrics_file), 'uncertainty_metrics.csv')
-    unc_data_available = False
-    try:
-        if os.path.exists(unc_df_path):
-            temp_unc_df = pd.read_csv(unc_df_path)
-            unc_data_available = True
-        elif os.path.exists('data/uncertainty_metrics.csv'):
-            temp_unc_df = pd.read_csv('data/uncertainty_metrics.csv')
-            unc_data_available = True
-    except Exception:
-        pass
-
     for col in unc_cols:
-        if unc_data_available and col in temp_unc_df.columns:
-            val = temp_unc_df[col].mean() * 100  # Convert to percentage
-            avg_unc.append(val)
-        elif col in df.columns:
-            val = df[col].mean() * 100
+        if col in df.columns:
+            val = df[col].mean() * 100  # Convert to percentage
             avg_unc.append(val)
         else:
             avg_unc.append(0)
@@ -533,21 +529,8 @@ def create_summary_plots(metrics_file: str, output_dir: str):
     # ========================================================================
     # Parameter Correlation Scatter Grid (2×3)
     # ========================================================================
-    # Optional: Read uncertainty metrics for scatter plots
-    unc_df = None
-    if os.path.exists('data/uncertainty_metrics.csv'):
-        unc_df = pd.read_csv('data/uncertainty_metrics.csv')
-        
-    outliers_df = None
-    if os.path.exists('data/scatter_outliers.csv'):
-        outliers_df = pd.read_csv('data/scatter_outliers.csv')
-
-    # Merge uncertainty data if available
-    if unc_df is not None:
-        merged = df.merge(unc_df[['object_id'] + [c for c in unc_df.columns if 'rel_uncertainty' in c]],
-                         on='object_id', how='left')
-    else:
-        merged = df.copy()
+    # Use the already combined dataframe for plotting
+    merged = df.copy()
 
     # Define the 6 scatter panels to match the reference figure layout
     # Row 1: ZAMS vs (56Ni, mloss_rate, k_energy)
@@ -687,4 +670,4 @@ def create_summary_plots(metrics_file: str, output_dir: str):
     print(f"\n✨ All summary plots created in: {output_dir}/")
 
 if __name__ == "__main__":
-    create_summary_plots()
+    create_summary_plots('data/convergence_metrics.csv', 'data/summary_plots')

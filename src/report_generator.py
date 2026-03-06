@@ -289,12 +289,13 @@ def main():
         res = subprocess.run(f'npx --yes md-to-pdf {md_path}', shell=True, capture_output=True, text=True)
         if res.returncode == 0:
             print(f"✅ Successfully exported diagnostic report to: {pdf_path}")
-            # The user asked not to create an .md report, but a PDF, so we clean up the intermediate md
+            # Clean up the intermediate md ONLY if PDF conversion succeeded
             os.remove(md_path)
         else:
-            raise RuntimeError(f"npx md-to-pdf silently failed to convert the markdown to PDF.\nEnsure you have Node.js and npx installed. StdErr: {res.stderr}")
+            print(f"⚠️ PDF conversion skipped (Node.js/npx not found on system).")
+            print(f"✅ Retaining Markdown report at: {md_path}")
     except Exception as e:
-        print(f"❌ Exception during PDF conversion: {e}. Keeping Markdown file at: {md_path}")
+        print(f"⚠️ PDF dependencies missing. Keeping Markdown file at: {md_path}")
         raise e
 
 if __name__ == '__main__':

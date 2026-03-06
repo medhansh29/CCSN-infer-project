@@ -185,7 +185,10 @@ def main():
     print(f"  • data/uncertainty_metrics.csv")
     print(f"  • data/red_alerts.csv - Critical physics and ML anomalies")
     print(f"  • data/scatter_outliers.csv - Trendline violations")
-    print(f"  • data/diagnostic_report.pdf - 🔥 MASTER DASHBOARD (PDF)")
+    if os.path.exists('data/diagnostic_report.pdf'):
+        print(f"  • data/diagnostic_report.pdf - 🔥 MASTER DASHBOARD (PDF)")
+    else:
+        print(f"  • data/diagnostic_report.md - 🔥 MASTER DASHBOARD (Markdown)")
     print(f"  • {args.summary_dir}/ - Global Plot directory")
     
     if pipeline_errors:
