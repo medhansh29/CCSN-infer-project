@@ -54,6 +54,7 @@ def main():
     args = parser.parse_args()
     
     start_time = datetime.now()
+    pipeline_errors = []
     
     print_header("REFITT CCSN INFERENCE ANALYSIS PIPELINE")
     print(f"Started at: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -111,7 +112,9 @@ def main():
         print(f"✅ Summary plots saved to: {args.summary_dir}/")
         
     except Exception as e:
-        print(f"❌ Error generating plots: {str(e)}")
+        err_msg = f"Error generating plots: {str(e)}"
+        print(f"❌ {err_msg}")
+        pipeline_errors.append(err_msg)
         print("Continuing without visualizations...")
 
     # ====================================================================
@@ -122,7 +125,9 @@ def main():
     try:
         find_all_outliers(metrics_file='data/convergence_metrics.csv')
     except Exception as e:
-        print(f"❌ Error generating scatter outliers: {str(e)}")
+        err_msg = f"Error generating scatter outliers: {str(e)}"
+        print(f"❌ {err_msg}")
+        pipeline_errors.append(err_msg)
         
     # ====================================================================
     # STEP 5: Run Integrated Anomaly Detection Engine
@@ -138,7 +143,9 @@ def main():
         run_red_alerts()
         sys.argv = original_argv
     except Exception as e:
-        print(f"❌ Error running anomaly detection: {str(e)}")
+        err_msg = f"Error running anomaly detection: {str(e)}"
+        print(f"❌ {err_msg}")
+        pipeline_errors.append(err_msg)
         
     # ====================================================================
     # STEP 6: Generate Final Diagnostic Report
@@ -148,7 +155,9 @@ def main():
     try:
         generate_report()
     except Exception as e:
-        print(f"❌ Error generating report: {str(e)}")
+        err_msg = f"Error generating report: {str(e)}"
+        print(f"❌ {err_msg}")
+        pipeline_errors.append(err_msg)
     
     # ====================================================================
     # STEP 7: Print Final Summary
@@ -158,7 +167,9 @@ def main():
     try:
         print_summary_stats(df)
     except Exception as e:
-        print(f"❌ Error printing summary: {str(e)}")
+        err_msg = f"Error printing summary: {str(e)}"
+        print(f"❌ {err_msg}")
+        pipeline_errors.append(err_msg)
     
     # ====================================================================
     # Pipeline Complete
@@ -177,7 +188,15 @@ def main():
     print(f"  • data/diagnostic_report.pdf - 🔥 MASTER DASHBOARD (PDF)")
     print(f"  • {args.summary_dir}/ - Global Plot directory")
     
-    print("\n✨ Analysis pipeline completed successfully!\n")
+    if pipeline_errors:
+        print("\n" + "!" * 70)
+        print("⚠️  PIPELINE FINISHED WITH ERRORS")
+        print("Please resolve the following before trusting the output:")
+        for err in pipeline_errors:
+            print(f"  - {err}")
+        print("!" * 70 + "\n")
+    else:
+        print("\n✨ Analysis pipeline completed successfully!\n")
 
 
 if __name__ == "__main__":

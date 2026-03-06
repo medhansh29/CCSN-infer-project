@@ -7,3 +7,5 @@ python-dotenv
 sncosmo>=2.10.0
 astropy>=4.0
 iminuit>=2.0
+scikit-learn
+scipy

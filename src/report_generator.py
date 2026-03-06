@@ -292,9 +292,10 @@ def main():
             # The user asked not to create an .md report, but a PDF, so we clean up the intermediate md
             os.remove(md_path)
         else:
-            print(f"❌ PDF conversion failed. Keeping Markdown file.\nError Details: {res.stderr}")
+            raise RuntimeError(f"npx md-to-pdf silently failed to convert the markdown to PDF.\nEnsure you have Node.js and npx installed. StdErr: {res.stderr}")
     except Exception as e:
         print(f"❌ Exception during PDF conversion: {e}. Keeping Markdown file at: {md_path}")
+        raise e
 
 if __name__ == '__main__':
     main()
