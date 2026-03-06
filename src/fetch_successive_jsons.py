@@ -42,7 +42,8 @@ class JSONFetcher:
         ])
         
         for date_dir in date_dirs:
-            date_str = date_dir.name
+            # Some directories have times appended (e.g., '2025-12-21 12.02.25 PM')
+            date_str = date_dir.name[:10]
             
             # Find all JSON files in this date directory
             json_files = list(date_dir.glob("*_nn.json"))

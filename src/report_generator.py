@@ -286,7 +286,7 @@ def main():
     import subprocess
     try:
         # Use npx to implicitly download and run md-to-pdf in one go
-        res = subprocess.run(['npx', '--yes', 'md-to-pdf', md_path], capture_output=True, text=True)
+        res = subprocess.run(f'npx --yes md-to-pdf {md_path}', shell=True, capture_output=True, text=True)
         if res.returncode == 0:
             print(f"✅ Successfully exported diagnostic report to: {pdf_path}")
             # The user asked not to create an .md report, but a PDF, so we clean up the intermediate md
