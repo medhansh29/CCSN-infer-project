@@ -130,10 +130,10 @@ python3 batch_analyze_objects.py --no-plots
 ```
 refitt-ccsn-infer/
 │
-├── main.py                            # CLI entrypoint — runs the complete 7-step pipeline
+├── main.py                            # CLI entrypoint — runs the complete pipeline
 ├── .env.example                       # Template for TNS credentials (committed)
-├── .env                               # Actual TNS credentials (NOT committed — gitignored)
-├── .tns_cache.json                    # Cached TNS API responses (auto-generated, gitignored)
+├── .env                               # Actual TNS credentials (gitignored)
+├── .tns_cache.json                    # Cached TNS API responses (gitignored)
 ├── .gitignore                         # Git exclusion rules
 ├── requirements.txt                   # Python dependencies
 ├── README.md                          # This file
@@ -141,30 +141,25 @@ refitt-ccsn-infer/
 ├── src/                               # SOURCE CODE DIRECTORY
 │   ├── batch_analyze_objects.py       # Main orchestrator — filtering, analysis, CSV output
 │   ├── fetch_successive_jsons.py      # Indexes JSON files by ZTF object ID across dates
-│   ├── compare_successive_observations.py # Per-object convergence: N₉₀, volatility, residuals
-│   ├── lightcurve_completeness.py     # Light curve completeness validation via Phase
-│   ├── confidence_metrics.py          # Posterior uncertainties from final JSON observation
-│   ├── tns_classifier.py              # TNS API queries for spectroscopic classification
-│   ├── create_summary_plots.py        # Batch summary visualizations
-│   ├── find_outliers.py               # Identifies 2D scatter trendline outliers
-│   ├── red_alert.py                   # Physics anomaly & ML (Isolation Forest) flagging
-│   └── report_generator.py            # Compiles data into the diagnostic PDF report
+│   ├── feature_extractors.py          # Physics engine: GP extraction, mass budget, anomalies
+│   ├── compare_successive_observations.py # Convergence: N₉₀, volatility, trajectory plots
+│   ├── lightcurve_completeness.py     # LC validation: Phase-based completeness gating
+│   ├── alerce_client.py               # Raw data: Fetches ZTF lightcurves via ALeRCE API
+│   ├── tns_classifier.py              # Filtering: TNS spectroscopic classification
+│   ├── create_summary_plots.py        # Visualization: Batch summary plots
+│   └── report_generator.py            # Reporting: PDF diagnostic report generator
 │
 ├── data/                              # PIPELINE OUTPUT DIRECTORY
-│   ├── convergence_metrics.csv        # OUTPUT: convergence + frequency metrics
-│   ├── uncertainty_metrics.csv        # OUTPUT: per-parameter posterior uncertainties
-│   ├── flagged_non_iip_objects.csv    # OUTPUT: objects excluded by TNS classification
-│   ├── red_alerts.csv                 # OUTPUT: rule-based and ML flagged anomalies
-│   ├── scatter_outliers.csv           # OUTPUT: 2D trendline outliers
-│   ├── diagnostic_report.pdf          # OUTPUT: auto-generated summary report
-│   └── summary_plots/                 # OUTPUT: batch-level summary visualizations
+│   ├── convergence_metrics.csv        # OUTPUT: main metrics, features, and flags
+│   ├── uncertainty_metrics.csv        # OUTPUT: per-parameter posterior diagnostics
+│   ├── flagged_non_iip_objects.csv    # OUTPUT: TNS-excluded objects
+│   ├── diagnostic_report.pdf          # OUTPUT: auto-generated PDF summary
+│   └── summary_plots/                 # OUTPUT: batch summary visualizations
 │
 ├── convergence_plots/                 # OUTPUT: per-object trajectory plots
 │
-├── 2025-10-31/                        # DATA: date-stamped REFITT JSON directories
-├── 2025-11-01/                        #   Each contains ZTF*.json files
-├── ...                                #   (one per object × filter × date)
-└── 2026-01-31/
+├── 202*                               # DATA: date-stamped REFITT JSON directories
+└── ...                                # (one per object × filter × date)
 ```
 
 ---
@@ -182,10 +177,11 @@ The primary output. One row per analyzed object.
 | **Identifiers**             | `object_id`                                                                                                                 | ZTF object ID                                             |
 | **Frequency**               | `total_runs`, `avg_interval_days`, `min_interval_days`, `max_interval_days`, `first_run`, `last_run`                        | How often REFITT ran inference on this object             |
 | **Phase**                   | `phase_start`, `phase_end`, `phase_span`                                                                                    | Observation time range (days since explosion)             |
-| **Convergence (×7 params)** | `zams_n90_days`, `zams_n90_phase`, `zams_converged`, `zams_final`                                                           | N₉₀: days until parameter stays within 10% of final value |
-| **Volatility (×7 params)**  | `zams_volatility_std`, `zams_volatility_mean_abs`, `zams_max_jump`                                                          | Jitter between successive parameter estimates             |
-| **Residuals**               | `mag_arr_rmse`, `mag_arr_mae`, `mag_arr_max_residual`                                                                       | Prediction accuracy vs observed magnitudes                |
-| **Completeness**            | `completeness_status`, `latest_phase`, `phase_category`, `fit_success`, `template_name`, `chi_squared_reduced`, `t0_fitted` | Light curve stage (Validated / Partial / Incomplete)      |
+| **Convergence (×7 params)** | `zams_n90_days`, `zams_converged`, `zams_final`                                                                            | N₉₀: days until parameter stays within 10% of final value        |
+| **Morphological (GP)**     | `M_plateau_25d`, `gp_t_fall`, `gp_t_rise`, `gp_gr_slope`, `plateau_duration_days`                                          | Derived from ALeRCE raw lightcurves                              |
+| **Mass & Physics**         | `implied_Mej`, `mass_budget_violation`, `prior_pegged`, `is_bimodal`                                                       | Kinetic energy vs ejecta mass and MCMC posterior diagnostics     |
+| **Precursor Activity**     | `precursor_status`, `precursor_flag`, `precursor_snr_max`                                                                  | Integration across $[-80, -20]$d window                         |
+| **Benchmarking**           | `M_peak_residual`, `plateau_duration_residual`, `is_anomaly`, `population_deviation_score`                                 | Deviation from batch-wide scaling relations and Isolation Forest |
 
 The 7 parameters are: `zams`, `mloss_rate`, `56Ni`, `k_energy`, `beta`, `texp`, `A_v`.
 
@@ -297,27 +293,38 @@ Date directories (2025-10-31/, 2025-11-01/, ...)
 
 ---
 
-## Key Metrics Explained
+## Detailed Methodology
 
-### N₉₀ (Convergence Time)
+### 1. Parameter Convergence ($N_{90}$)
+**$N_{90}$** is defined as the number of days from the first observation until a physical parameter enters and remains within a ±10% threshold of its final (latest) value.
+- **Population Baseline**: Since REFITT fits can be volatile in early phases, $N_{90}$ is only considered "Validated" if the final observation phase is $\ge 100$ days (radioactive tail phase).
+- **Stability**: A parameter is marked as `converged` only if it maintains this threshold for all subsequent observations in the indexed timeline.
 
-Days until a parameter first stays within 10% of its final value for all subsequent observations. Lower = faster convergence.
+### 2. GP Morphological Features
+Using Gaussian Process (GP) regression on raw ZTF lightcurves fetched via ALeRCE:
+- **$M_{\text{plateau, 25d}}$**: The absolute magnitude evaluated exactly 25 days post-explosion ($t_{\exp} + 25$). This specific phase is chosen to avoid the "shock breakout" or early cooling spike (typically 0–10 days) which often contains non-representative physics for standard IIP classification.
+- **$t_{\text{rise}}$ / $t_{\text{fall}}$**: Derived from the first derivative ($\frac{dm}{dt}$) of the GP mean. $t_{\text{fall}}$ corresponds to the epoch of fastest decline, a proxy for the end of the plateau.
+- **Color Evolution ($g-r$ slope)**: The linear slope of the $g-r$ color index between days 25 and 60 post-explosion.
 
-### Volatility (σ)
+### 3. Precursor Activity Scan
+Scans the pre-explosion window ($[-80, -20]$ days) for cumulative flux excess.
+- **Cumulative Integration**: Rather than single-night 5$\sigma$ alerts, we integrate flux across the window to detect faint, persistent eruptions.
+- **Visibility Gate**: A scan is only performed if a canonical $-13$ mag RSG eruption would be brighter than ZTF's limiting magnitude ($20.5$) at the object's distance. If $z < 0.015$ (peculiar velocity regime), the distance modulus is flagged as uncertain.
 
-Standard deviation of step-to-step fractional changes in a parameter: `Δp / p_prev`. Measures prediction stability.
+### 4. Mass Budget & Physics Constraints
+- **Implied $M_{\text{ej}}$**: Calculated as $M_{\text{ZAMS}} - 1.5\,M_\odot$ (assuming a $1.5\,M_\odot$ remnant).
+- **Mass Budget Violation**: Flagged if the ratio of Kinetic Energy to Ejecta Mass ($\frac{E_k}{M_{\text{ej}}}$) exceeds $1.0$. This indicates a physically inconsistent fit where the energy density is too high for a sustained IIP plateau.
 
-### Completeness Status
+### 5. Dynamic Benchmarking (Population Residuals)
+For each batch of analyzed objects, the pipeline builds a population-level baseline:
+- **Sample Median**: We calculate the column-wise median for all morphological features across the current "clean" batch (TNS-validated SN IIP).
+- **Linear Benchmarking**: We perform linear regression on the batch to predict $M_{\text{plateau, 25d}}$ from $(ZAMS, E_k)$ and Plateau Duration from the scaling relation $(\frac{M_{\text{ej}}^3}{E_k})^{0.25}$.
+- **Residuals**: Individual objects are evaluated by their deviation from these population-derived trendlines.
 
-Based on the model's Phase parameter (days since explosion):
-
-- **Validated** (≥100d): On the radioactive tail — convergence is reliable
-- **Partial** (70–100d): Plateau phase — interpret with caution
-- **Incomplete** (<70d): Too early — excluded from analysis
-
-### Relative Uncertainty
-
-From the posterior: `(upper_err + lower_err) / (2 × |median|)`. Values <0.1 indicate tight constraints.
+### 6. Anomaly Detection (Isolation Forest)
+The **Aggregator** uses an Isolation Forest trained on the **morphological feature space** (not the REFITT parameter space).
+- **Morphological Space**: Includes $M_{\text{plateau, 25d}}$, $t_{\text{fall}}$, $g-r$ slope, and Lag-1 Autocorrelation of residuals.
+- **Population Deviation Score**: The Euclidean distance of an object from the batch centroid in the standardized (Z-scored) morphological feature space.
 
 ---
 
@@ -327,63 +334,24 @@ From the posterior: `(upper_err + lower_err) / (2 × |median|)`. Values <0.1 ind
 
 CLI entrypoint. Runs the complete 4-step pipeline: index → analyze → visualize → report. All steps are orchestrated here with error handling and timing.
 
-### `src/batch_analyze_objects.py`
+### `src/feature_extractors.py`
+The "Physics Engine" of the pipeline. Implements all advanced feature extraction classes including `GPMorphologicalExtractor` (absolute magnitudes, color slopes), `PrecursorScan` (integrated pre-explosion flux), and the `Aggregator` (population-level Benchmarking and Isolation Forest anomaly detection).
 
-The main orchestrator. For each object: loads data via `JSONFetcher`, runs TNS filtering, checks light curve completeness, computes convergence metrics, extracts uncertainties, computes run frequency, and writes all three CSVs. Also generates per-object trajectory plots.
-
-### `src/fetch_successive_jsons.py`
-
-Scans all `YYYY-MM-DD/` directories for `ZTF*.json` files. Builds an index mapping each ZTF object ID to its chronological list of observations. Provides the `JSONFetcher` class used by all other modules.
+### `src/alerce_client.py`
+A robust client for fetching raw ZTF lightcurves from the ALeRCE API. Used by the GP extractions to supplement REFITT's model-processed data with raw observations for accurate morphological analysis.
 
 ### `src/compare_successive_observations.py`
-
 Core convergence analyzer. For each object, it:
-
 1. Loads the chronological timeline of JSON observations
 2. Extracts the 7 physical parameters at each epoch
-3. Computes N₉₀ (days to convergence), volatility metrics, and inter-observation residuals
-4. Generates multi-panel trajectory plots
+3. Computes N₉₀ (days to convergence) and volatility metrics
+4. Generates multi-panel trajectory plots showing parameter stabilization
 
-**Standalone**: `python3 src/compare_successive_observations.py --object ZTF25abfuicb`
-
-### `src/lightcurve_completeness.py`
-
-Validates light curve completeness using the model's Phase parameter. Classifies objects as Validated (≥100d, on radioactive tail), Partial (70–100d, plateau), or Incomplete (<70d, early). Objects with Phase <70d are excluded from analysis.
-
-**Standalone**: `python3 src/lightcurve_completeness.py <json_file>`
-
-### `src/confidence_metrics.py`
-
-Extracts posterior uncertainties from a single JSON observation file. Computes relative uncertainty, asymmetry index, log evidence, and posterior predictive spread for all 7 parameters.
-
-**Standalone**: `python3 src/confidence_metrics.py <json_file>`
-
-### `src/tns_classifier.py`
-
-Queries the [Transient Name Server](https://www.wis-tns.org/) for official spectroscopic classifications. Only objects classified as **SN II** or **SN IIP** pass through; all others are flagged and excluded. Results are cached in `.tns_cache.json` — subsequent runs make zero API calls.
-
-- **Rate limiting**: 1 request/second (TNS requirement)
-- **Standalone**: `python3 src/tns_classifier.py`
-
-### `src/create_summary_plots.py`
-
-Generates batch visualizations from `data/convergence_metrics.csv`:
-
-- Convergence time distributions (N₉₀ histograms per parameter)
-- Volatility comparisons (box plots across parameters)
-- Parameter correlations (scatter matrix of final values)
-- Overall performance summary (combined dashboard)
-- Object stability rankings
-
-**Standalone**: `python3 src/create_summary_plots.py`
-
-### `src/red_alert.py`
-
-Flags mathematically and physically anomalous fits. Uses hard physical bounds (e.g. Explosion Energy to Ejecta Mass ratio) and an Isolation Forest to flag objects holding out-of-distribution values but exhibiting paradoxically high confidence scores.
+### `src/batch_analyze_objects.py`
+The main orchestrator. For each object: loads data via `JSONFetcher`, runs TNS filtering, checks light curve completeness, executes the `feature_extractors`, and computes run frequency. It writes the three primary CSV outputs and coordinates the batch-level `Aggregator` logic.
 
 ### `src/report_generator.py`
-
-Ingests all downstream outputs (metrics, anomalies, outliers, TNS tags) into a Markdown template and compiles a comprehensive, styled PDF `diagnostic_report.pdf` presenting overall pipeline health alongside specific flags. Outputs to `data/`.
+Ingests all downstream outputs (metrics, features, anomalies, TNS tags) into a Markdown template and compiles the `diagnostic_report.pdf` presenting overall pipeline health. Outputs are saved to `data/`.
 
 ---
 
