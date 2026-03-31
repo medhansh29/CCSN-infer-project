@@ -15,7 +15,14 @@ from fetch_successive_jsons import JSONFetcher
 from compare_successive_observations import ConvergenceAnalyzer
 from lightcurve_completeness import LightCurveCompletenessChecker
 
-from confidence_metrics import ConfidenceMetrics
+from feature_extractors import (
+    GPMorphologicalExtractor, LateTimeTailRegression, 
+    SystematicResidualsAnalyzer, PrecursorScan, 
+    PriorsVolatilityCheck, Aggregator,
+    PosteriorAnalyzer, MassBudgetExtractor
+)
+from alerce_client import AlerceClient
+import json
 from tns_classifier import TNSClassifier, generate_flagged_csv
 
 
@@ -47,6 +54,8 @@ def batch_analyze(min_obs: int = 5):
     
     print(f"  🚩 Flagged {len(flagged_ids)} non-IIP objects (excluded from analysis)")
     # ------------------------------------
+    
+    alerce_client = AlerceClient()
     
     # Process each object
     results = []
@@ -124,17 +133,150 @@ def batch_analyze(min_obs: int = 5):
             row['chi_squared_reduced'] = completeness_score.chi_squared_reduced
             row['t0_fitted'] = completeness_score.t0_fitted
             
-            # --- Confidence Metrics (raw per-parameter uncertainties) ---
+            # --- Feature Extraction (Steps 1-5) ---
             try:
-                conf_metrics = ConfidenceMetrics(json_file=final_obs_file)
-                conf_results = conf_metrics.compute_all()
-                # Add all confidence metrics to the row
-                for key, value in conf_results.items():
-                    row[key] = value
+                # Get model prediction DataFrame
+                with open(final_obs_file, 'r') as f:
+                    model_data = json.load(f)
+                
+                # Check for needed keys
+                if 'mjd_arr' in model_data and 'mag_arr' in model_data:
+                    model_df = pd.DataFrame({
+                        'mjd_arr': model_data['mjd_arr'],
+                        'mag_median': model_data['mag_arr'][0] # Format is [median, upper, lower]
+                    })
+                else:
+                    model_df = None
+                    
+                final_params = model_data.get('parameters', {})
+                
+                # Fetch raw lightcurve from ALeRCE
+                raw_df = alerce_client.fetch_lightcurve(obj_id)
+                
+                redshift = None
+                dist_mod = None
+                distance_uncertain = False
+                if not class_df.empty and obj_id in class_df['object_id'].values:
+                    redshift_val = class_df.loc[class_df['object_id'] == obj_id, 'redshift']
+                    if not redshift_val.empty:
+                        redshift = redshift_val.iloc[0]
+                
+                # Convert raw and model DataFrames to Absolute Magnitude
+                if redshift and redshift > 0:
+                    # Low-z peculiar velocity gate (Phase 3): host galaxy movement dominates
+                    # Hubble flow for z < 0.015, making distance modulus unreliable.
+                    if redshift < 0.015:
+                        distance_uncertain = True
+                    try:
+                        from astropy.cosmology import FlatLambdaCDM
+                        import astropy.units as u
+                        import numpy as np
+                        cosmo = FlatLambdaCDM(H0=70, Om0=0.3)
+                        dL = cosmo.luminosity_distance(redshift)
+                        dist_mod = 5 * np.log10(dL.to(u.pc).value) - 5
+                        
+                        if raw_df is not None and not raw_df.empty:
+                            raw_df['mag'] = raw_df['mag'] - dist_mod
+                            
+                        if model_df is not None and not model_df.empty:
+                            model_df['mag_median'] = model_df['mag_median'] - dist_mod
+                    except Exception as e:
+                        pass
+                
+                # Step 1: GP (raw_df is now Absolute Magnitude)
+                # Pass t_exp_mjd from REFITT so GP evaluates at t_exp+25d, not M_peak
+                t_exp_mjd = None
+                if 'texp' in final_params:
+                    texp_val = final_params['texp']
+                    t_exp_mjd = texp_val[0] if isinstance(texp_val, list) else float(texp_val)
+                gp_res = GPMorphologicalExtractor.extract(raw_df, t_exp_mjd=t_exp_mjd)
+                peak_mjd = gp_res.get('t_fall')
+                
+                # Step 2: Late-Time Tail
+                tail_res = LateTimeTailRegression.extract(raw_df, peak_mjd)
+                
+                # Step 2b: Mass Budget Sanity Check
+                mass_res = MassBudgetExtractor.extract(final_params)
+                
+                # Step 3: Systematic Residuals
+                res_res = SystematicResidualsAnalyzer.extract(raw_df, model_df)
+                
+                # Step 4: Precursor Scan (with visibility gate)
+                prec_res = PrecursorScan.extract(raw_df, peak_mjd, distance_modulus=dist_mod)
+                
+                # Step 5: Priors & Volatility
+                # Extract previous runs from timeline
+                previous_runs = []
+                for (date, _, filepath) in observations:
+                    try:
+                        with open(filepath, 'r') as f:
+                            pdata = json.load(f)
+                            if 'parameters' in pdata:
+                                previous_runs.append(pdata['parameters'])
+                    except:
+                        pass
+                        
+                prior_res = PriorsVolatilityCheck.extract(final_params, previous_runs=previous_runs)
+                
+                # Step 5b: Bimodal & Prior Bound Pegging
+                # Extract filename base
+                file_base = Path(final_obs_file).name.replace('.json', '').replace('_g_nn', '_samples').replace('_r_nn', '_samples')
+                samples_path = str(Path(final_obs_file).parent / f"{file_base}.txt")
+                post_res = PosteriorAnalyzer.extract(samples_path, final_params)
+                
+                # Compute plateau duration (t_fall MJD - t0_fitted MJD)
+                plateau_duration_days = None
+                t0_model = row.get('t0_fitted')
+                if gp_res.get('t_fall') is not None and t0_model is not None:
+                    plateau_duration_days = gp_res.get('t_fall') - t0_model
+
+                row.update({
+                    'gp_t_fall': gp_res.get('t_fall'),
+                    'plateau_duration_days': plateau_duration_days,
+                    'M_plateau_25d': gp_res.get('M_plateau_25d'),
+                    'gp_t_rise': gp_res.get('t_rise'),
+                    'gp_gr_slope': gp_res.get('gr_slope'),
+                    'implied_Mej': mass_res.get('implied_Mej'),
+                    'mass_budget_violation': mass_res.get('mass_budget_violation'),
+                    'tail_slope': tail_res.get('tail_slope'),
+                    'late_time_r2': tail_res.get('late_time_r2'),
+                    'lag1_autocorr': res_res.get('lag1_autocorr'),
+                    'residual_std': res_res.get('residual_std'),
+                    'precursor_flag': prec_res.get('precursor_flag'),
+                    'precursor_snr_max': prec_res.get('precursor_snr_max'),
+                    'precursor_status': prec_res.get('precursor_status'),
+                    'distance_uncertain': distance_uncertain,
+                    'is_bimodal': post_res.get('is_bimodal'),
+                })
+                
+                # Add parameter uncertainties (NEW)
+                for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v']:
+                    if param in final_params:
+                        p_vals = final_params[param]
+                        if isinstance(p_vals, list) and len(p_vals) >= 3:
+                            median, p84_off, p16_off = p_vals[0], p_vals[1], p_vals[2]
+                            # Sigma is the average of the upper and lower offsets
+                            sigma = (p84_off + p16_off) / 2.0
+                            row[f'{param}_rel_uncertainty'] = sigma / abs(median) if median != 0 else 0
+                            row[f'{param}_asymmetry_index'] = p84_off / (p16_off + 1e-9)
+                        else:
+                            row[f'{param}_rel_uncertainty'] = 0
+                            row[f'{param}_asymmetry_index'] = 1.0
+                
+                # Join pegged parameters to string
+                row['prior_pegged'] = ",".join(post_res.get('prior_pegged', []))
+                
+                # Add prior deviations and volatility
+                for p, v in prior_res.get('prior_deviations', {}).items():
+                    row[f'{p}_prior_dev'] = v
+                for p, v in prior_res.get('volatility_scores', {}).items():
+                    row[f'{p}_volatility_score'] = v
+                    
             except Exception as e:
-                # If confidence metrics fail, continue without them
-                pass
-            # ---------------------------
+                import traceback
+                print(f"  Error extracting features for {obj_id}: {str(e)}")
+                traceback.print_exc()
+            # --------------------------------------
             
             results.append(row)
             
@@ -144,6 +286,10 @@ def batch_analyze(min_obs: int = 5):
     
     # Create full DataFrame
     df = pd.DataFrame(results)
+    
+    # Step 6: Apply Aggregator
+    print("\n🧠 Running Multi-Dimensional Aggregator (Isolation Forest)...")
+    df = Aggregator.extract(df)
     
     # Print summary of completeness filtering
     print(f"\n📊 Filtering Results:")
@@ -216,6 +362,18 @@ def batch_analyze(min_obs: int = 5):
                          'completeness_status', 'latest_phase',
                          'phase_category', 'fit_success', 'template_name',
                          'chi_squared_reduced', 't0_fitted']
+                         
+    # New feature extractors
+    convergence_cols += [
+        'gp_t_fall', 'M_plateau_25d', 'plateau_duration_days', 'gp_t_rise', 'gp_gr_slope', 
+        'implied_Mej', 'mass_budget_violation', 'prior_pegged', 'is_bimodal',
+        'tail_slope', 'late_time_r2', 'M_peak_predicted', 'M_peak_residual',
+        'plateau_duration_predicted', 'plateau_duration_residual',
+        'lag1_autocorr', 'residual_std', 'precursor_flag', 'precursor_snr_max',
+        'is_anomaly', 'population_deviation_score'
+    ]
+    for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v']:
+        convergence_cols += [f'{param}_prior_dev', f'{param}_volatility_score']
     
     # Keep only columns that actually exist
     convergence_cols = [c for c in convergence_cols if c in df.columns]
@@ -326,8 +484,6 @@ def print_summary_stats(df: pd.DataFrame):
 def main():
     """Main execution function."""
     parser = argparse.ArgumentParser(description='Batch process SN II-P LCs')
-    parser.add_argument('--input-dir', type=str, required=True,
-                       help='Base directory containing YYYY-MM-DD observation folders')
     parser.add_argument('--min-obs', type=int, default=5,
                        help='Minimum number of observations required (default: 5)')
     
@@ -341,7 +497,7 @@ def main():
     # Print summary statistics
     print_summary_stats(df)
     
-    print(f"Results saved to: convergence_metrics.csv")
+    print(f"Results saved to: data/convergence_metrics.csv")
 
 
 if __name__ == "__main__":

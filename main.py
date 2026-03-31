@@ -1,33 +1,32 @@
 #!/usr/bin/env python3
 """
-Main pipeline for REFITT CCSN Inference Analysis
+Main entry point for the REFITT CCSN Inference Analysis Pipeline.
 
-Runs the complete analysis pipeline:
-1. Index all JSON files by object ID
-2. Batch analyze convergence metrics
-3. Generate summary visualizations
-4. Print comprehensive report
+This script orchestrates the full analytical workflow:
+1. Indexing: Scans local directories for REFITT inference JSON outputs.
+2. Batch Analysis: Performs physics-based feature extraction and convergence checks.
+3. Visualization: Generates batch-level summary plots.
+4. Diagnostic Report: Produces a concise, physically-grounded outlier PDF.
 
 Usage:
-    python3 main.py [--min-obs N] [--no-plots]
+    python3 main.py [--min-obs N] [--summary-dir DIR]
 """
 
 import argparse
 import sys
+import os
 from pathlib import Path
 from datetime import datetime
 
-# Add 'src' directory to Python path so internal modules can resolve each other
+# Add 'src' directory to Python path
 src_path = str(Path(__file__).resolve().parent / "src")
 if src_path not in sys.path:
     sys.path.insert(0, src_path)
 
-# Import analysis modules
+# Import consolidated pipeline modules
 from fetch_successive_jsons import JSONFetcher
 from batch_analyze_objects import batch_analyze, print_summary_stats
 from create_summary_plots import create_summary_plots
-from find_outliers import find_all_outliers
-from red_alert import main as run_red_alerts
 from report_generator import main as generate_report
 
 def print_header(text, char='='):
@@ -37,170 +36,102 @@ def print_header(text, char='='):
     print(f"{text:^{width}}")
     print(f"{char * width}\n")
 
-
 def main():
-    """Run complete analysis pipeline."""
+    """Run automated analysis pipeline."""
     
-    # Parse arguments
     parser = argparse.ArgumentParser(
-        description='Complete CCSN Inference Analysis Pipeline'
+        description='REFITT CCSN Inference Unified Pipeline'
     )
-    parser.add_argument('--min-obs', type=int, default=5,
-                       help='Minimum number of observations required (default: 5)')
+    parser.add_argument('--min-obs', type=int, default=12,
+                       help='Minimum observations for reliable analysis (default: 12)')
     parser.add_argument('--summary-dir', type=str, default='data/summary_plots',
                        help='Directory for summary plots (default: data/summary_plots)')
-
     
     args = parser.parse_args()
     
     start_time = datetime.now()
     pipeline_errors = []
     
-    print_header("REFITT CCSN INFERENCE ANALYSIS PIPELINE")
+    print_header("REFITT CCSN INFERENCE: UNIFIED PIPELINE")
     print(f"Started at: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"Minimum observations: {args.min_obs}")
+    print(f"Minimum reliable observations: {args.min_obs}")
     
-    # ====================================================================
-    # STEP 1: Index JSON Files
-    # ====================================================================
-    print_header("STEP 1: Indexing JSON Files", '-')
-    
+    # --- STEP 1: Indexing ---
+    print_header("STEP 1: Indexing JSON Outputs", '-')
     try:
         fetcher = JSONFetcher()
-        object_index = fetcher.scan_directories()
+        fetcher.scan_directories()
         fetcher.print_summary()
-        
-        # Save object index
-        multi_obs = fetcher.get_objects_with_multiple_obs(min_obs=1)
-        print(f"✅ Indexed {len(multi_obs)} unique objects")
-        
     except Exception as e:
-        print(f"❌ Error indexing files: {str(e)}")
+        print(f"❌ Critical Error in indexing: {str(e)}")
         sys.exit(1)
     
-    # ====================================================================
-    # STEP 2: Batch Convergence Analysis
-    # ====================================================================
-    print_header("STEP 2: Batch Convergence Analysis", '-')
-    
+    # --- STEP 2: Batch Analysis ---
+    print_header("STEP 2: Physics-Based Batch Analysis", '-')
     try:
-        df = batch_analyze(
-            min_obs=args.min_obs
-        )
-        
+        df = batch_analyze(min_obs=args.min_obs)
         if len(df) == 0:
-            print(f"⚠️  No objects found with {args.min_obs}+ observations")
-            print("Try reducing --min-obs parameter")
+            print(f"⚠️ No objects found with {args.min_obs}+ observations.")
             sys.exit(0)
-        
-        print(f"✅ Analyzed {len(df)} objects")
-        
+        print(f"✅ Analyzed {len(df)} objects.")
     except Exception as e:
         print(f"❌ Error in batch analysis: {str(e)}")
         sys.exit(1)
     
-    # ====================================================================
-    # STEP 3: Generate Summary Visualizations
-    # ====================================================================
+    # --- STEP 3: Summary Plots ---
     print_header("STEP 3: Generating Summary Visualizations", '-')
-    
     try:
         create_summary_plots(
             metrics_file='data/convergence_metrics.csv',
             output_dir=args.summary_dir
         )
-        print(f"✅ Summary plots saved to: {args.summary_dir}/")
         
+        # Cleanup redundant files (legacy per-object plots)
+        allowed_files = [
+            'n90_distributions.png', 'volatility_vs_n90.png', 'n90_correlations.png',
+            'parameter_correlations.png', 'overall_summary.png', 'confidence_grades.png',
+            'relative_uncertainties.png', 'confidence_components.png', 'confidence_vs_data.png',
+            'parameter_scatter_grid.png'
+        ]
+        print(f"🧹 Cleaning up redundant files in {args.summary_dir}...")
+        for f in os.listdir(args.summary_dir):
+            if f not in allowed_files and f.endswith('.png'):
+                os.remove(os.path.join(args.summary_dir, f))
+                
+        print(f"✅ Summary plots saved to: {args.summary_dir}/")
     except Exception as e:
         err_msg = f"Error generating plots: {str(e)}"
         print(f"❌ {err_msg}")
         pipeline_errors.append(err_msg)
-        print("Continuing without visualizations...")
 
-    # ====================================================================
-    # STEP 4: Find Scattter Outliers
-    # ====================================================================
-    print_header("STEP 4: Finding Scatter Outliers", '-')
-    
-    try:
-        find_all_outliers(metrics_file='data/convergence_metrics.csv')
-    except Exception as e:
-        err_msg = f"Error generating scatter outliers: {str(e)}"
-        print(f"❌ {err_msg}")
-        pipeline_errors.append(err_msg)
-        
-    # ====================================================================
-    # STEP 5: Run Integrated Anomaly Detection Engine
-    # ====================================================================
-    print_header("STEP 5: Running Anomaly Detection (Physics, ML, Percentiles)", '-')
-    
-    try:
-        # red_alert.main() handles the argument parsing if we run via CLI, 
-        # but here we can just call it (it uses argparse defaults if passed no args!)
-        # Actually it parses sys.argv. Let's patch sys.argv temporarily.
-        original_argv = sys.argv
-        sys.argv = ['red_alert.py', '--convergence', 'data/convergence_metrics.csv', '--uncertainties', 'data/uncertainty_metrics.csv', '--alerts-output', 'data/red_alerts.csv']
-        run_red_alerts()
-        sys.argv = original_argv
-    except Exception as e:
-        err_msg = f"Error running anomaly detection: {str(e)}"
-        print(f"❌ {err_msg}")
-        pipeline_errors.append(err_msg)
-        
-    # ====================================================================
-    # STEP 6: Generate Final Diagnostic Report
-    # ====================================================================
-    print_header("STEP 6: Generating Diagnostic Report", '-')
-    
+    # --- STEP 4: Diagnostic Report (PDF) ---
+    print_header("STEP 4: Generating Master Diagnostic Report", '-')
     try:
         generate_report()
     except Exception as e:
-        err_msg = f"Error generating report: {str(e)}"
+        err_msg = f"Error generating PDF report: {str(e)}"
         print(f"❌ {err_msg}")
         pipeline_errors.append(err_msg)
     
-    # ====================================================================
-    # STEP 7: Print Final Summary
-    # ====================================================================
-    print_header("STEP 7: Analysis Console Summary", '-')
-    
-    try:
-        print_summary_stats(df)
-    except Exception as e:
-        err_msg = f"Error printing summary: {str(e)}"
-        print(f"❌ {err_msg}")
-        pipeline_errors.append(err_msg)
-    
-    # ====================================================================
-    # Pipeline Complete
-    # ====================================================================
+    # --- Final Summary ---
+    print_header("PIPELINE COMPLETE", '=')
     end_time = datetime.now()
     duration = (end_time - start_time).total_seconds()
     
-    print_header("PIPELINE COMPLETE", '=')
     print(f"Finished at: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"Total runtime: {duration:.2f} seconds ({duration/60:.2f} minutes)")
-    print(f"\n📊 Results saved:")
-    print(f"  • data/convergence_metrics.csv")
-    print(f"  • data/uncertainty_metrics.csv")
-    print(f"  • data/red_alerts.csv - Critical physics and ML anomalies")
-    print(f"  • data/scatter_outliers.csv - Trendline violations")
+    print(f"Total runtime: {duration:.2f} seconds")
+    
     if os.path.exists('data/diagnostic_report.pdf'):
-        print(f"  • data/diagnostic_report.pdf - 🔥 MASTER DASHBOARD (PDF)")
-    else:
-        print(f"  • data/diagnostic_report.md - 🔥 MASTER DASHBOARD (Markdown)")
-    print(f"  • {args.summary_dir}/ - Global Plot directory")
+        print(f"\n🚀 MASTER REPORT GENERATED: data/diagnostic_report.pdf")
     
     if pipeline_errors:
         print("\n" + "!" * 70)
-        print("⚠️  PIPELINE FINISHED WITH ERRORS")
-        print("Please resolve the following before trusting the output:")
+        print("⚠️  PIPELINE FINISHED WITH NON-CRITICAL ERRORS")
         for err in pipeline_errors:
             print(f"  - {err}")
         print("!" * 70 + "\n")
     else:
-        print("\n✨ Analysis pipeline completed successfully!\n")
-
+        print("\n✨ Pipeline executed successfully!\n")
 
 if __name__ == "__main__":
     main()
