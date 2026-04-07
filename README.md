@@ -1,6 +1,6 @@
 # REFITT CCSN Inference Analysis Pipeline
 
-A modular pipeline for analyzing Core-Collapse Supernova (CCSN) parameter convergence from [REFITT](https://refitt.org/) model outputs. The pipeline processes successive JSON observation files, evaluates how quickly physical parameters converge to stable values, and produces publication-ready metrics and visualizations.
+A modular pipeline for analyzing Core-Collapse Supernova (CCSN) parameter convergence from [REFITT](https://refitt.org/) model outputs. The pipeline processes successive JSON observation files, evaluates how quickly physical parameters converge to stable values, detects physical anomalies, and produces a publication-ready PDF diagnostic report.
 
 ## Overview
 
@@ -14,7 +14,7 @@ REFITT produces daily inference outputs for active ZTF transients, each containi
 4. **Computes** convergence metrics (N₉₀, volatility), prediction residuals, and parameter uncertainties
 5. **Generates** per-object trajectory plots and batch summary visualizations
 6. **Detects** mathematical and physical anomalies (ML & Rule-based alerts)
-7. **Compiles** a comprehensive PDF diagnostic report of all outputs
+7. **Compiles** a comprehensive PDF diagnostic report with interactive navigation and actionable review items
 
 ---
 
@@ -33,7 +33,7 @@ cd refitt-ccsn-infer
 pip install -r requirements.txt
 ```
 
-Dependencies: `pandas`, `numpy`, `matplotlib`, `tqdm`, `requests`, `python-dotenv`, `sncosmo`, `astropy`, `iminuit`
+**System Requirement:** The PDF report generation requires a working `pdflatex` installation (e.g., via [TeX Live](https://tug.org/texlive/) or [MacTeX](https://tug.org/mactex/)).
 
 ### 3. Configure TNS Credentials
 
@@ -60,8 +60,8 @@ Place REFITT JSON observation data in date-stamped directories in the project ro
 ```
 refitt-ccsn-infer/
 ├── 2025-10-31/
-│   ├── ZTF25abfuicb_r.json
-│   ├── ZTF25abfuicb_g.json
+│   ├── ZTF25abfuicb_r_nn.json
+│   ├── ZTF25abfuicb_g_nn.json
 │   └── ...
 ├── 2025-11-01/
 │   └── ...
@@ -85,18 +85,14 @@ This sequentially executes all pipeline modules:
 1. **Index** — Scans all date directories and indexes JSON files by ZTF object ID
 2. **Analyze** — TNS classification filtering → light curve completeness → convergence metrics → CSV output
 3. **Visualize** — Generates summary plots from `data/convergence_metrics.csv`
-4. **Scatter Outliers** — Detects trendline deviations from parameter distributions
-5. **Anomaly Detection** — Uses physics constraints and Isolation Forests to flag weird fits
-6. **Report Generation** — Converts all CSV metrics and plot images into a clean PDF `data/diagnostic_report.pdf`
+4. **Diagnostic Report** — Compiles all CSV metrics, plot images, and anomaly flags into a fully interactive PDF at `data/diagnostic_report.pdf`
 
 ### CLI Options
 
 | Flag                | Default             | Description                                        |
 | :------------------ | :------------------ | :------------------------------------------------- |
-| `--min-obs N`       | `5`                 | Minimum number of observations required per object |
-| `--no-plots`        | off                 | Skip generating all plots (faster)                 |
-| `--plot-dir DIR`    | `convergence_plots` | Output directory for per-object trajectory plots   |
-| `--summary-dir DIR` | `summary_plots`     | Output directory for batch summary visualizations  |
+| `--min-obs N`       | `12`                | Minimum number of observations required per object |
+| `--summary-dir DIR` | `data/summary_plots`| Output directory for batch summary visualizations  |
 
 ### Examples
 
@@ -104,23 +100,11 @@ This sequentially executes all pipeline modules:
 # Full pipeline with all plots
 python3 main.py
 
-# Fast run without plots
-python3 main.py --no-plots
+# Only include objects with 20+ observations
+python3 main.py --min-obs 20
 
-# Only include objects with 10+ observations
-python3 main.py --min-obs 10
-
-# Custom output directories
-python3 main.py --plot-dir my_plots --summary-dir my_summary
-```
-
-### Running Without `main.py`
-
-You can also run the batch analysis directly (skips the `main.py` wrapper):
-
-```bash
-python3 batch_analyze_objects.py
-python3 batch_analyze_objects.py --no-plots
+# Custom summary plot directory
+python3 main.py --summary-dir my_summary
 ```
 
 ---
@@ -147,13 +131,18 @@ refitt-ccsn-infer/
 │   ├── alerce_client.py               # Raw data: Fetches ZTF lightcurves via ALeRCE API
 │   ├── tns_classifier.py              # Filtering: TNS spectroscopic classification
 │   ├── create_summary_plots.py        # Visualization: Batch summary plots
-│   └── report_generator.py            # Reporting: PDF diagnostic report generator
+│   ├── report_generator.py            # Reporting: PDF diagnostic report generator
+│   └── templates/
+│       └── report_template.tex        # LaTeX template for the diagnostic PDF
 │
 ├── data/                              # PIPELINE OUTPUT DIRECTORY
 │   ├── convergence_metrics.csv        # OUTPUT: main metrics, features, and flags
 │   ├── uncertainty_metrics.csv        # OUTPUT: per-parameter posterior diagnostics
 │   ├── flagged_non_iip_objects.csv    # OUTPUT: TNS-excluded objects
-│   ├── diagnostic_report.pdf          # OUTPUT: auto-generated PDF summary
+│   ├── diagnostic_report.pdf          # OUTPUT: auto-generated PDF diagnostic report
+│   ├── diagnostic_report.tex          # OUTPUT: generated LaTeX source
+│   ├── report_images/                 # OUTPUT: per-OID diagnostic packages
+│   │   └── {OID}_{run_date}/          #   Subfolders with plots + raw parameter JSONs
 │   └── summary_plots/                 # OUTPUT: batch summary visualizations
 │
 ├── convergence_plots/                 # OUTPUT: per-object trajectory plots
@@ -166,7 +155,7 @@ refitt-ccsn-infer/
 
 ## Pipeline Output
 
-The pipeline produces **five CSVs**, a PDF report, and two optional plot directories.
+The pipeline produces **three primary CSVs**, a PDF report, a diagnostic metadata package, and two optional plot directories.
 
 ### 1. `convergence_metrics.csv`
 
@@ -207,25 +196,35 @@ Objects excluded from analysis because their TNS spectroscopic type is not SN II
 | `tns_type`    | Spectroscopic type (SN IIn, SN IIb, etc.)   |
 | `flag_reason` | Human-readable reason for exclusion         |
 
-### 4. `red_alerts.csv`
+### Diagnostic Report (`data/diagnostic_report.pdf`)
 
-Anomaly flags generated via physical rule constraints and Isolation Forest ML.
+The automated PDF report provides a comprehensive anomaly analysis with the following sections:
 
-| Column           | Description                                             |
-| :--------------- | :------------------------------------------------------ |
-| `object_id`      | ZTF object ID                                           |
-| `alert_reason`   | Human-readable explanation of why this was flagged      |
-| `severity_score` | 3 (Physics), 2 (Machine Learning), 1 (Statistical Skew) |
+| Section                          | Contents                                                                                     |
+| :------------------------------- | :------------------------------------------------------------------------------------------- |
+| **I. Methodology & Definitions** | Mathematical definitions and thresholds for all anomaly categories                           |
+| **II. Energetic Deviations**     | Ledger of objects with luminosity excesses, mass budget violations, or nickel overabundance   |
+| **III. Morphological Outliers**  | Ledger of objects with extreme plateau length extensions or truncations                      |
+| **IV. Progenitor Environment**   | Ledger of objects showing precursor detection, early rise excess, or arrested cooling         |
+| **V. Plateau Topography**        | Ledger of objects with rebrightening bumps or linear residual clusters                       |
+| **VI. Coupled Anomalies**        | Objects triggering multiple categories ("Bright & Slow" paradox, environmental correlations) |
+| **VII. Flagged Object Profiles** | Deep-dive pages with per-object MCMC fits, light curves, and actionable review instructions  |
+| **Appendix A**                   | Filtered non-IIP objects from `flagged_non_iip_objects.csv`                                  |
 
-### 5. `scatter_outliers.csv`
+**Report Features:**
+- **Interactive Navigation**: TOC links jump to deep-dive profiles; profiles link back to their summary ledger
+- **ALeRCE Integration**: Object IDs in profiles link directly to the ALeRCE explorer
+- **Actionable Diagnostics**: Each profile includes specific "Required Review Actions" tailored to its anomaly flags
+- **Processing Timestamps**: Each profile displays the source run folder for temporal context
 
-Objects strongly deviating (>1.5σ) from typical linear distributions (e.g. ZAMS vs Ni56).
+### Diagnostic Metadata Package (`data/report_images/`)
 
-| Column                          | Description                          |
-| :------------------------------ | :----------------------------------- |
-| `object_id`                     | ZTF object ID                        |
-| `x_param_name` / `y_param_name` | The variables being cross-referenced |
-| `direction`                     | E.g. "Below predicted trendline"     |
+For each flagged object, the pipeline creates a per-OID subfolder containing:
+- Best-fit light curve plot (`.png`)
+- Posterior corner plot (`.jpg`)
+- Raw REFITT parameter JSON files (`_g_nn.json`, `_r_nn.json`)
+
+Subfolder naming convention: `{OID}_{run_date}/` (e.g., `ZTF25abfntiq_2025-11-10/`)
 
 ### Plot Directories
 
@@ -266,7 +265,7 @@ Date directories (2025-10-31/, 2025-11-01/, ...)
                │
                ▼
     ┌──────────────────────────┐
-    │   confidence_metrics     │  Posterior uncertainties
+    │   feature_extractors     │  GP morphology, mass budget, precursors
     └──────────┬───────────────┘
                │
                ▼
@@ -279,16 +278,18 @@ Date directories (2025-10-31/, 2025-11-01/, ...)
                │
                ▼
     ┌──────────────────────────┐
-    │   Anomaly Detection      │  (red_alert.py, find_outliers.py)
+    │   Report Generation      │  (report_generator.py + template)
     └──────────┬───────────────┘
                │
                ▼
-    ┌──────────────────────────┐
-    │   Report Generation      │  (report_generator.py)
-    └──────────┬───────────────┘
-               │
-               ▼
-      data/diagnostic_report.pdf
+    ┌──────────────────────────────────────────────┐
+    │  data/diagnostic_report.pdf                  │
+    │  data/report_images/{OID}_{run_date}/        │
+    │    ├── {OID}_lc.png                          │
+    │    ├── {OID}_corner.jpg                      │
+    │    ├── {OID}_g_nn.json                       │
+    │    └── {OID}_r_nn.json                       │
+    └──────────────────────────────────────────────┘
 ```
 
 ---
@@ -326,6 +327,15 @@ The **Aggregator** uses an Isolation Forest trained on the **morphological featu
 - **Morphological Space**: Includes $M_{\text{plateau, 25d}}$, $t_{\text{fall}}$, $g-r$ slope, and Lag-1 Autocorrelation of residuals.
 - **Population Deviation Score**: The Euclidean distance of an object from the batch centroid in the standardized (Z-scored) morphological feature space.
 
+### 7. Diagnostic Report Generation
+The report generator loads `convergence_metrics.csv` and applies category-specific thresholds:
+- **Energetic Deviations**: $|M_{\text{obs}} - M_{\text{exp}}| > 0.75$ mag, $E_k/M_{\text{ej}} > 1.0$, $M_{\text{Ni}}/M_{\text{ej}} > 0.01$
+- **Morphological Outliers**: $|t_{\text{obs}} - t_{\text{exp}}| > 20$ days
+- **Progenitor Environment**: $>3\sigma$ precursor flux, $>0.1$ mag early rise excess, arrested cooling
+- **Plateau Topography**: Rebrightening bumps ($dm/dt < 0$ for $>5$ days), linear residual clusters ($\ge 0.1$ mag)
+
+All flagged objects receive a deep-dive profile with actionable review instructions and best-fit plot rendering. Plots and raw JSONs are collected into `data/report_images/{OID}_{run_date}/` subfolders for offline inspection.
+
 ---
 
 ## Module Reference
@@ -333,6 +343,12 @@ The **Aggregator** uses an Isolation Forest trained on the **morphological featu
 ### `main.py`
 
 CLI entrypoint. Runs the complete 4-step pipeline: index → analyze → visualize → report. All steps are orchestrated here with error handling and timing.
+
+### `src/report_generator.py`
+Loads the LaTeX template from `src/templates/report_template.tex`, populates it with data from `convergence_metrics.csv` and `flagged_non_iip_objects.csv`, copies diagnostic plots and JSONs into `data/report_images/`, and compiles the final `data/diagnostic_report.pdf` via `pdflatex`.
+
+### `src/templates/report_template.tex`
+The standalone LaTeX template for the diagnostic PDF. Uses Roman numeral sectioning, `longtable` for multi-page ledgers, and `float` package `[H]` placement for anchored figures. Editable independently of the Python code.
 
 ### `src/feature_extractors.py`
 The "Physics Engine" of the pipeline. Implements all advanced feature extraction classes including `GPMorphologicalExtractor` (absolute magnitudes, color slopes), `PrecursorScan` (integrated pre-explosion flux), and the `Aggregator` (population-level Benchmarking and Isolation Forest anomaly detection).
@@ -348,10 +364,7 @@ Core convergence analyzer. For each object, it:
 4. Generates multi-panel trajectory plots showing parameter stabilization
 
 ### `src/batch_analyze_objects.py`
-The main orchestrator. For each object: loads data via `JSONFetcher`, runs TNS filtering, checks light curve completeness, executes the `feature_extractors`, and computes run frequency. It writes the three primary CSV outputs and coordinates the batch-level `Aggregator` logic.
-
-### `src/report_generator.py`
-Ingests all downstream outputs (metrics, features, anomalies, TNS tags) into a Markdown template and compiles the `diagnostic_report.pdf` presenting overall pipeline health. Outputs are saved to `data/`.
+The main orchestrator. For each object: loads data via `JSONFetcher`, runs TNS filtering, checks light curve completeness, executes the `feature_extractors`, and computes run frequency. It writes the primary CSV outputs and coordinates the batch-level `Aggregator` logic.
 
 ---
 
@@ -360,4 +373,5 @@ Ingests all downstream outputs (metrics, features, anomalies, TNS tags) into a M
 - The pipeline is **idempotent** — re-running overwrites previous outputs
 - TNS cache (`.tns_cache.json`) persists across runs — delete it to force re-query
 - Add new date directories with REFITT JSONs and re-run to incorporate new observations
-- All modules are importable: `from module import ClassName`
+- PDF compilation requires `pdflatex`; the report is compiled twice to resolve cross-references and `longtable` widths
+- All modules are importable: `from src.module import ClassName`

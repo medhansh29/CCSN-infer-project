@@ -19,7 +19,8 @@ from feature_extractors import (
     GPMorphologicalExtractor, LateTimeTailRegression, 
     SystematicResidualsAnalyzer, PrecursorScan, 
     PriorsVolatilityCheck, Aggregator,
-    PosteriorAnalyzer, MassBudgetExtractor
+    PosteriorAnalyzer, MassBudgetExtractor,
+    EarlyRiseExcessExtractor, ArrestedCoolingExtractor, PlateauTopographyExtractor
 )
 from alerce_client import AlerceClient
 import json
@@ -185,10 +186,11 @@ def batch_analyze(min_obs: int = 5):
                 
                 # Step 1: GP (raw_df is now Absolute Magnitude)
                 # Pass t_exp_mjd from REFITT so GP evaluates at t_exp+25d, not M_peak
-                t_exp_mjd = None
-                if 'texp' in final_params:
-                    texp_val = final_params['texp']
-                    t_exp_mjd = texp_val[0] if isinstance(texp_val, list) else float(texp_val)
+                t_exp_mjd = row.get('t0_fitted')
+                if t_exp_mjd is None or pd.isna(t_exp_mjd):
+                    if raw_df is not None and not raw_df.empty:
+                        t_exp_mjd = raw_df['mjd'].min()
+                
                 gp_res = GPMorphologicalExtractor.extract(raw_df, t_exp_mjd=t_exp_mjd)
                 peak_mjd = gp_res.get('t_fall')
                 
@@ -202,8 +204,14 @@ def batch_analyze(min_obs: int = 5):
                 res_res = SystematicResidualsAnalyzer.extract(raw_df, model_df)
                 
                 # Step 4: Precursor Scan (with visibility gate)
-                prec_res = PrecursorScan.extract(raw_df, peak_mjd, distance_modulus=dist_mod)
+                prec_res = PrecursorScan.extract(raw_df, t_exp_mjd, distance_modulus=dist_mod)
                 
+                # Step 4b: CSM & Early Morphologies
+                early_rise_res = EarlyRiseExcessExtractor.extract(raw_df, t_exp_mjd)
+                arrested_cooling_res = ArrestedCoolingExtractor.extract(raw_df, t_exp_mjd)
+                
+                # Step 4c: Plateau Topography
+                topography_res = PlateauTopographyExtractor.extract(raw_df, t_exp_mjd)
                 # Step 5: Priors & Volatility
                 # Extract previous runs from timeline
                 previous_runs = []
@@ -243,10 +251,14 @@ def batch_analyze(min_obs: int = 5):
                     'lag1_autocorr': res_res.get('lag1_autocorr'),
                     'residual_std': res_res.get('residual_std'),
                     'precursor_flag': prec_res.get('precursor_flag'),
-                    'precursor_snr_max': prec_res.get('precursor_snr_max'),
                     'precursor_status': prec_res.get('precursor_status'),
                     'distance_uncertain': distance_uncertain,
                     'is_bimodal': post_res.get('is_bimodal'),
+                    'early_rise_excess_flag': early_rise_res.get('early_rise_excess_flag'),
+                    'arrested_cooling_flag': arrested_cooling_res.get('arrested_cooling_flag'),
+                    'early_gr_slope': arrested_cooling_res.get('early_gr_slope'),
+                    'rebrightening_flag': topography_res.get('rebrightening_flag'),
+                    'linear_residual_flag': topography_res.get('linear_residual_flag'),
                 })
                 
                 # Add parameter uncertainties (NEW)
@@ -369,7 +381,9 @@ def batch_analyze(min_obs: int = 5):
         'implied_Mej', 'mass_budget_violation', 'prior_pegged', 'is_bimodal',
         'tail_slope', 'late_time_r2', 'M_peak_predicted', 'M_peak_residual',
         'plateau_duration_predicted', 'plateau_duration_residual',
-        'lag1_autocorr', 'residual_std', 'precursor_flag', 'precursor_snr_max',
+        'lag1_autocorr', 'residual_std', 'precursor_flag', 
+        'early_rise_excess_flag', 'arrested_cooling_flag', 'early_gr_slope',
+        'rebrightening_flag', 'linear_residual_flag',
         'is_anomaly', 'population_deviation_score'
     ]
     for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v']:

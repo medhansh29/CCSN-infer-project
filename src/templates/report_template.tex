@@ -1,0 +1,202 @@
+\documentclass[11pt,a4paper]{article}
+
+% Packages
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage[space]{grffile}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{float}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{amsmath}
+\usepackage{caption}
+
+% Custom Colors & Hyperlink Setup
+\definecolor{outlierred}{RGB}{200,50,50}
+\definecolor{warningorange}{RGB}{200,120,0}
+\definecolor{headerblue}{RGB}{40,80,150}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=headerblue,
+    urlcolor=headerblue,
+    pdftitle={Type IIP Batch Diagnostics}
+}
+
+% Standardize on Roman Numerals for Section Numbering
+\renewcommand{\thesection}{\Roman{section}}
+
+% Custom ALeRCE Command
+\newcommand{\alerce}[1]{\href{https://alerce.online/object/#1}{#1}}
+\graphicspath{{./}}
+
+\begin{document}
+
+% --- TITLE PAGE ---
+\begin{center}
+    {\Huge \bfseries Type IIP Supernova Diagnostics} \\[0.5cm]
+    {\Large Automated Batch Anomaly Report} \\[0.2cm]
+    {\normalsize Run Date: {run_date} \quad | \quad Total Objects Analyzed: \textbf{{total_objects}}}
+\end{center}
+
+\vspace{0.5cm}
+\tableofcontents
+\clearpage
+
+% ==========================================
+% I. METHODOLOGY & DEFINITIONS
+% ==========================================
+\section{Methodology \& Anomaly Definitions}
+\textit{This section outlines the physical scaling relations, mathematical thresholds, and Bayesian diagnostic criteria used by the automated pipeline to flag anomalous objects.}
+
+\subsection*{Energetic \& Scaling Deviations}
+Flags in this category denote a fundamental violation of the expected mass, energy, or luminosity budget for a standard Type IIP explosion.
+\begin{itemize}
+    \item \textbf{Luminosity Excess:} The expected plateau magnitude ($M_{exp}$) is calculated via scaling relations based on the inferred $ZAMS$ and explosion energy ($E_k$). An object is flagged if the observed absolute magnitude ($M_{obs}$) deviates significantly: 
+    $|M_{obs} - M_{exp}| > 0.75 \text{ mag}$
+    \item \textbf{Mass Budget Violation:} Evaluates the specific kinetic energy. Flagged if unphysically high for a standard IIP:
+    $(E_k / M_{ej}) > 1.0 \text{ } (10^{51}\text{erg} / M_\odot)$
+    \item \textbf{Nickel Overabundance:} Evaluates the radioactive tail fraction. Flagged if the ratio suggests anomalous radioactive heating:
+    $(M_{Ni} / M_{ej}) > 0.01$
+\end{itemize}
+
+\subsection*{Morphological \& Light Curve Outliers}
+Flags in this category track global shape deviations from standard hydrogen recombination models.
+\begin{itemize}
+    \item \textbf{Extreme Plateau Extension/Truncation:} The observed plateau duration ($t_{obs}$) is compared to the theoretical duration derived from the inferred physical parameters ($t_{exp}$). Flagged if:
+    $|t_{obs} - t_{exp}| > 20 \text{ days}$
+\end{itemize}
+
+\subsection*{Progenitor Environment \& Shock Breakout}
+Flags in this category denote local environmental interactions, specifically eruptive pre-supernova mass loss and early shock interaction with Circumstellar Material (CSM).
+\begin{itemize}
+    \item \textbf{Precursor Detection:} A rolling baseline mean ($\mu$) and standard deviation ($\sigma$) are calculated for photometry prior to $t_{exp} - 10$ days. A flag is triggered if the immediate pre-explosion window ($t_{exp} - 10$ to $t_{exp}$) contains $\ge 2$ consecutive detections where $Flux > \mu + 3\sigma$.
+    \item \textbf{Early Rise Excess:} A standard fireball expansion curve ($f \propto t^2$) is fit to the first 3 days of photometry. Flagged if early observations exhibit a $>0.1$ magnitude excess above the $t^2$ fit, indicating shock breakout in dense CSM.
+    \item \textbf{Arrested Cooling:} Measures the early color gradient. Flagged if the ejecta remains artificially blue across the first 15 days ($d(g-r)/dt < 0.04$ mag/day).
+\end{itemize}
+
+\subsection*{Plateau Topography}
+Flags in this category address non-standard behavior during the hydrogen recombination phase.
+\begin{itemize}
+    \item \textbf{Rebrightening Bump:} Identifies periods where flux actively increases during the plateau (days 20-70). Flagged if $dm/dt < 0$ for a contiguous span of $> 5$ days.
+    \item \textbf{Linear Residual Excess:} A simple linear regression is fit to the plateau. Flagged if a contiguous cluster of residuals peaks $\ge 0.1$ magnitudes above the fit.
+\end{itemize}
+\clearpage
+
+% ==========================================
+% CATEGORY LEDGERS (II - V)
+% ==========================================
+\section{Energetic \& Scaling Deviations} \label{sec:catI}
+\textit{Objects exhibiting severe luminosity excesses or budget violations.}
+\begin{longtable}{@{}llccl@{}}
+\toprule
+\textbf{Object Id} & \textbf{Obs. Mag} & \textbf{Exp. Mag} & \textbf{ZAMS/$E_k$} & \textbf{Primary Flag} \\ \midrule
+\endfirsthead
+\toprule
+\textbf{Object Id} & \textbf{Obs. Mag} & \textbf{Exp. Mag} & \textbf{ZAMS/$E_k$} & \textbf{Primary Flag} \\ \midrule
+\endhead
+\bottomrule
+\endfoot
+{cat1_rows}\end{longtable}
+
+\clearpage
+\section{Morphological \& Light Curve Outliers} \label{sec:catII}
+\textit{Objects exhibiting extreme plateau length extensions or truncations.}
+\begin{longtable}{@{}lccc@{}}
+\toprule
+\textbf{Object Id} & \textbf{Obs. Dur} & \textbf{Exp. Dur} & \textbf{Deviation (days)} \\ \midrule
+\endfirsthead
+\toprule
+\textbf{Object Id} & \textbf{Obs. Dur} & \textbf{Exp. Dur} & \textbf{Deviation (days)} \\ \midrule
+\endhead
+\bottomrule
+\endfoot
+{cat2_rows}\end{longtable}
+
+\clearpage
+\section{Progenitor Environment (Precursor \& CSM)} \label{sec:catIII}
+\textit{Objects showing early mass-loss interaction or unphysical shock breakout heat.}
+\begin{longtable}{@{}lcccc@{}}
+\toprule
+\textbf{Object Id} & \textbf{Precursor} & \textbf{Rise Excess} & \textbf{Arr. Cool (g-r)} & \textbf{Primary Flag} \\ \midrule
+\endfirsthead
+\toprule
+\textbf{Object Id} & \textbf{Precursor} & \textbf{Rise Excess} & \textbf{Arr. Cool (g-r)} & \textbf{Primary Flag} \\ \midrule
+\endhead
+\bottomrule
+\endfoot
+{cat3_rows}\end{longtable}
+
+\clearpage
+\section{Plateau Topography} \label{sec:catIV}
+\textit{Objects with rebrightening bumps or non-linear residuals during the plateau.}
+\begin{longtable}{@{}lcc@{}}
+\toprule
+\textbf{Object Id} & \textbf{Rebrightening} & \textbf{Lin. Res. Cluster} \\ \midrule
+\endfirsthead
+\toprule
+\textbf{Object Id} & \textbf{Rebrightening} & \textbf{Lin. Res. Cluster} \\ \midrule
+\endhead
+\bottomrule
+\endfoot
+{cat4_rows}\end{longtable}
+
+\clearpage
+
+% ==========================================
+% VI. PHYSICALLY COUPLED ANOMALIES
+% ==========================================
+\section{Physically Coupled Anomalies}
+\textit{Objects triggering multiple anomaly categories that suggest complex, non-standard physics.}
+
+\subsection*{A. The "Bright \& Slow" Paradox}
+\textit{Objects with extreme brightness combined with unexpectedly long plateaus. Indicates massive envelopes or sustained secondary power sources.}
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Object Id} & \textbf{Mag Excess} & \textbf{Plateau Excess} & \textbf{Link to Plots} \\ \midrule
+{coupled_bs_rows}\end{tabular}
+\end{table}
+
+\subsection*{B. Environmental Cause \& Effect}
+\textit{Objects showing both $\ge 3\sigma$ precursor mass-loss and early-time shock breakout excesses.}
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Object Id} & \textbf{Precursor} & \textbf{CSM Evidence} & \textbf{Link to Plots} \\ \midrule
+{coupled_env_rows}\end{tabular}
+\end{table}
+
+\clearpage
+
+% ==========================================
+% VII. FLAGGED OBJECT DEEP DIVES
+% ==========================================
+\section{Flagged Object Profiles}
+\textit{Detailed MCMC fits, light curves, and diagnostic reasoning for all outlier objects.}
+
+{coupled_profiles}
+
+\clearpage
+
+% ==========================================
+% APPENDIX
+% ==========================================
+\phantomsection
+\section*{Appendix A: Filtered Non-IIP Objects}
+\addcontentsline{toc}{section}{Appendix A: Filtered Non-IIP Objects}
+
+\begin{longtable}{@{}lll@{}}
+\toprule
+\textbf{Object Id} & \textbf{Alerce Link} & \textbf{Rejection Reason} \\ \midrule
+\endfirsthead
+\toprule
+\textbf{Object Id} & \textbf{Alerce Link} & \textbf{Rejection Reason} \\ \midrule
+\endhead
+\bottomrule
+\endfoot
+{filtered_rows}\end{longtable}
+
+\end{document}

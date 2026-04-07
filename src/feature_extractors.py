@@ -200,89 +200,183 @@ class SystematicResidualsAnalyzer:
         return result
 
 class PrecursorScan:
-    # ZTF limiting apparent magnitude (5-sigma)
     ZTF_LIMITING_MAG = 20.5
-    # Canonical RSG eruption absolute magnitude
     RSG_ERUPT_ABS_MAG = -13.0
 
     @staticmethod
-    def extract(raw_df: pd.DataFrame, peak_mjd: float, distance_modulus: float = None):
-        """
-        Step 4: Precursor Activity Scan (Phase 3 redesign)
-        
-        Uses cumulative flux integration in [-80, -20] days rather than single-night
-        SNR thresholds, since precursors rarely trigger ZTF's alert 5-sigma cuts.
-        
-        A Visibility Gate is applied first: if a canonical -13 mag RSG eruption
-        would be fainter than ZTF's limit at this object's redshift, the scan is
-        skipped and labelled 'Precursor theoretically undetectable'.
-        """
+    def extract(raw_df: pd.DataFrame, t_exp_mjd: float, distance_modulus: float = None):
         result = {
             'precursor_flag': False,
-            'precursor_snr_max': None,
             'precursor_status': 'not_scanned'
         }
-        if raw_df is None or peak_mjd is None:
+        if raw_df is None or t_exp_mjd is None or np.isnan(t_exp_mjd):
             return result
 
-        # ---- Visibility Gate ----
         if distance_modulus is not None and not np.isnan(distance_modulus):
             expected_app_mag = PrecursorScan.RSG_ERUPT_ABS_MAG + distance_modulus
             if expected_app_mag > PrecursorScan.ZTF_LIMITING_MAG:
                 result['precursor_status'] = 'theoretically_undetectable'
                 return result
 
-        # ---- Pre-peak window: -80 to -20 days ----
-        prepeak_df = raw_df[
-            (raw_df['mjd'] >= peak_mjd - 80) & (raw_df['mjd'] <= peak_mjd - 20)
-        ].copy()
+        prepeak_df = raw_df[(raw_df['mjd'] >= t_exp_mjd - 10) & (raw_df['mjd'] < t_exp_mjd)].copy()
+        baseline_df = raw_df[raw_df['mjd'] < t_exp_mjd - 10].copy()
 
-        if len(prepeak_df) < 3:
+        if len(prepeak_df) < 2 or len(baseline_df) < 3:
             result['precursor_status'] = 'insufficient_coverage'
             return result
 
+        baseline_df['flux'] = 10.0 ** (-0.4 * baseline_df['mag'])
+        mu = baseline_df['flux'].mean()
+        sigma = baseline_df['flux'].std()
+        if pd.isna(sigma) or sigma == 0:
+            sigma = baseline_df['flux_err'].mean() if 'flux_err' in baseline_df else mu * 0.1
+
         prepeak_df = prepeak_df.sort_values('mjd')
-
-        # Convert magnitudes to flux (arbitrary units, consistent within this scan)
-        # Using: flux = 10^(-0.4 * mag), flux_err ~ (ln10 / 2.5) * flux * magerr
         prepeak_df['flux'] = 10.0 ** (-0.4 * prepeak_df['mag'])
-        prepeak_df['flux_err'] = (np.log(10) / 2.5) * prepeak_df['flux'] * prepeak_df['magerr']
-
-        # ---- Baseline from the far pre-explosion window [-300, -80] ----
-        baseline_df = raw_df[
-            (raw_df['mjd'] >= peak_mjd - 300) & (raw_df['mjd'] < peak_mjd - 80)
-        ].copy()
-
-        if len(baseline_df) >= 3:
-            baseline_df['flux'] = 10.0 ** (-0.4 * baseline_df['mag'])
-            baseline_df['flux_err'] = (np.log(10) / 2.5) * baseline_df['flux'] * baseline_df['magerr']
-            background_flux = baseline_df['flux'].median()
-        else:
-            # No baseline window data: use the first 10% of the pre-peak window as baseline proxy
-            n_base = max(1, len(prepeak_df) // 10)
-            background_flux = prepeak_df.iloc[:n_base]['flux'].median()
-
-        # ---- Cumulative integrated flux excess ----
-        flux_excess = prepeak_df['flux'] - background_flux
-        flux_err = prepeak_df['flux_err']
-
-        # Cumulative sum and propagated error
-        cumulative_excess = flux_excess.sum()
-        cumulative_err = np.sqrt((flux_err ** 2).sum())
-
-        if cumulative_err > 1e-30:
-            cumulative_snr = cumulative_excess / cumulative_err
-        else:
-            cumulative_snr = 0.0
-
-        result['precursor_snr_max'] = float(cumulative_snr)
-
-        if cumulative_snr > 2.5:
-            result['precursor_flag'] = True
-            result['precursor_status'] = 'detected'
-        else:
+        
+        consecutive_count = 0
+        threshold = mu + 3 * sigma
+        for flux in prepeak_df['flux']:
+            if flux > threshold:
+                consecutive_count += 1
+                if consecutive_count >= 2:
+                    result['precursor_flag'] = True
+                    result['precursor_status'] = 'detected'
+                    break
+            else:
+                consecutive_count = 0
+        
+        if not result['precursor_flag']:
             result['precursor_status'] = 'not_detected'
 
+        return result
+
+class EarlyRiseExcessExtractor:
+    @staticmethod
+    def extract(raw_df: pd.DataFrame, t_exp_mjd: float):
+        result = {'early_rise_excess_flag': False}
+        if raw_df is None or t_exp_mjd is None or np.isnan(t_exp_mjd):
+            return result
+        
+        early_df = raw_df[(raw_df['mjd'] > t_exp_mjd) & (raw_df['mjd'] <= t_exp_mjd + 3)].copy()
+        if len(early_df) < 3:
+            return result
+        
+        early_df = early_df.sort_values('mjd')
+        early_df['dt'] = early_df['mjd'] - t_exp_mjd
+        early_df['flux'] = 10.0 ** (-0.4 * early_df['mag'])
+        
+        from scipy.optimize import curve_fit
+        def fireball(t, a):
+            return a * (t ** 2)
+            
+        try:
+            popt, _ = curve_fit(fireball, early_df['dt'], early_df['flux'])
+            expected_flux = fireball(early_df['dt'].values, *popt)
+            expected_mag = -2.5 * np.log10(expected_flux)
+            
+            diffs = expected_mag - early_df['mag'].values
+            if np.any(diffs > 0.1):
+                result['early_rise_excess_flag'] = True
+        except:
+            pass
+            
+        return result
+
+class ArrestedCoolingExtractor:
+    @staticmethod
+    def extract(raw_df: pd.DataFrame, t_exp_mjd: float):
+        result = {'arrested_cooling_flag': False, 'early_gr_slope': None}
+        if raw_df is None or t_exp_mjd is None or np.isnan(t_exp_mjd):
+            return result
+            
+        band_counts = raw_df['filter'].value_counts()
+        g_bands = [b for b in band_counts.keys() if 'g' in str(b).lower()]
+        r_bands = [b for b in band_counts.keys() if 'r' in str(b).lower()]
+        
+        if not g_bands or not r_bands:
+            return result
+            
+        early_df = raw_df[(raw_df['mjd'] > t_exp_mjd) & (raw_df['mjd'] <= t_exp_mjd + 15)].copy()
+        
+        g_early = early_df[early_df['filter'] == g_bands[0]]
+        r_early = early_df[early_df['filter'] == r_bands[0]]
+        
+        if len(g_early) < 2 or len(r_early) < 2:
+            return result
+            
+        try:
+            r_interp = np.interp(g_early['mjd'].values, r_early['mjd'].values, r_early['mag'].values)
+            g_minus_r = g_early['mag'].values - r_interp
+            
+            slope, _, _, _, _ = linregress(g_early['mjd'].values, g_minus_r)
+            result['early_gr_slope'] = slope
+            
+            if slope < 0.04:
+                result['arrested_cooling_flag'] = True
+        except:
+            pass
+            
+        return result
+
+class PlateauTopographyExtractor:
+    @staticmethod
+    def extract(raw_df: pd.DataFrame, t_exp_mjd: float):
+        result = {'rebrightening_flag': False, 'linear_residual_flag': False}
+        if raw_df is None or t_exp_mjd is None or np.isnan(t_exp_mjd):
+            return result
+            
+        plat_df = raw_df[(raw_df['mjd'] >= t_exp_mjd + 20) & (raw_df['mjd'] <= t_exp_mjd + 70)].copy()
+        band_counts = plat_df['filter'].value_counts()
+        if band_counts.empty:
+            return result
+            
+        dom = band_counts.idxmax()
+        df_dom = plat_df[plat_df['filter'] == dom].sort_values('mjd')
+        
+        if len(df_dom) < 5:
+            return result
+        
+        mjd = df_dom['mjd'].values
+        mag = df_dom['mag'].values
+        
+        dt = np.diff(mjd)
+        dmag = np.diff(mag)
+        slope = dmag / dt
+        
+        in_neg = False
+        span_start = 0
+        for i, s in enumerate(slope):
+            if s < 0:
+                if not in_neg:
+                    in_neg = True
+                    span_start = mjd[i]
+            else:
+                if in_neg:
+                    in_neg = False
+                    if mjd[i] - span_start > 5:
+                        result['rebrightening_flag'] = True
+                        break
+        if in_neg and (mjd[-1] - span_start > 5):
+            result['rebrightening_flag'] = True
+
+        try:
+            line_slope, line_int, _, _, _ = linregress(mjd, mag)
+            expected_mag = line_slope * mjd + line_int
+            residuals = expected_mag - mag
+            
+            cluster_count = 0
+            for res in residuals:
+                if res >= 0.1:
+                    cluster_count += 1
+                    if cluster_count >= 2:
+                        result['linear_residual_flag'] = True
+                        break
+                else:
+                    cluster_count = 0
+        except:
+            pass
+            
         return result
 
 class PosteriorAnalyzer:

@@ -27,7 +27,7 @@ if src_path not in sys.path:
 from fetch_successive_jsons import JSONFetcher
 from batch_analyze_objects import batch_analyze, print_summary_stats
 from create_summary_plots import create_summary_plots
-from report_generator import main as generate_report
+from report_generator import generate_report
 
 def print_header(text, char='='):
     """Print formatted section header."""
