@@ -1,6 +1,7 @@
 pandas
 numpy
 matplotlib
+seaborn
 tqdm
 requests
 python-dotenv

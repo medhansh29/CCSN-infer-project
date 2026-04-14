@@ -320,64 +320,116 @@ class ArrestedCoolingExtractor:
         return result
 
 class PlateauTopographyExtractor:
+    """
+    Plateau Topography Analysis via Detrending & Peak Prominence.
+    
+    Hardened against two common false-positive sources:
+    1. Tail-Drop Skew — The detrending window is strictly truncated to
+       days 20-60 post-explosion, well before the radioactive tail onset
+       (~day 80+). This prevents late-time dim points from dragging the
+       regression line down and creating a phantom "bump" in the middle.
+    2. Noise Clustering — A Gaussian smoothing filter (σ=3 days) is applied
+       to the interpolated residuals before peak detection. This destroys
+       1-2 day noise spikes while perfectly preserving genuine 15+ day
+       rebrightening events.
+    """
+    # Minimum peak prominence in magnitudes (brighter = positive residual)
+    MIN_PROMINENCE = 0.15
+    # Minimum peak width in days
+    MIN_WIDTH_DAYS = 10
+    # Plateau detrending window (days post-explosion)
+    # Strictly ends at 60d to avoid contamination from the tail drop
+    PLAT_START = 20
+    PLAT_END = 60
+    # Gaussian smoothing kernel sigma (days)
+    SMOOTH_SIGMA = 3.0
+
     @staticmethod
     def extract(raw_df: pd.DataFrame, t_exp_mjd: float):
-        result = {'rebrightening_flag': False, 'linear_residual_flag': False}
+        result = {
+            'rebrightening_flag': False,
+            'rebrightening_prominence': None,
+            'rebrightening_width_days': None,
+            'linear_residual_flag': False,
+            'linear_residual_max': None,
+        }
         if raw_df is None or t_exp_mjd is None or np.isnan(t_exp_mjd):
             return result
-            
-        plat_df = raw_df[(raw_df['mjd'] >= t_exp_mjd + 20) & (raw_df['mjd'] <= t_exp_mjd + 70)].copy()
+
+        plat_df = raw_df[
+            (raw_df['mjd'] >= t_exp_mjd + PlateauTopographyExtractor.PLAT_START)
+            & (raw_df['mjd'] <= t_exp_mjd + PlateauTopographyExtractor.PLAT_END)
+        ].copy()
         band_counts = plat_df['filter'].value_counts()
         if band_counts.empty:
             return result
-            
+
         dom = band_counts.idxmax()
         df_dom = plat_df[plat_df['filter'] == dom].sort_values('mjd')
-        
+
         if len(df_dom) < 5:
             return result
-        
+
         mjd = df_dom['mjd'].values
         mag = df_dom['mag'].values
-        
-        dt = np.diff(mjd)
-        dmag = np.diff(mag)
-        slope = dmag / dt
-        
-        in_neg = False
-        span_start = 0
-        for i, s in enumerate(slope):
-            if s < 0:
-                if not in_neg:
-                    in_neg = True
-                    span_start = mjd[i]
-            else:
-                if in_neg:
-                    in_neg = False
-                    if mjd[i] - span_start > 5:
-                        result['rebrightening_flag'] = True
-                        break
-        if in_neg and (mjd[-1] - span_start > 5):
-            result['rebrightening_flag'] = True
+        phase = mjd - t_exp_mjd  # days since explosion
 
+        # --- Step 1: Detrend the plateau ---
+        # Fit ONLY on the truncated 20-60d window to avoid tail-drop contamination
         try:
-            line_slope, line_int, _, _, _ = linregress(mjd, mag)
-            expected_mag = line_slope * mjd + line_int
-            residuals = expected_mag - mag
-            
-            cluster_count = 0
-            for res in residuals:
-                if res >= 0.1:
-                    cluster_count += 1
-                    if cluster_count >= 2:
-                        result['linear_residual_flag'] = True
-                        break
-                else:
-                    cluster_count = 0
-        except:
+            line_slope, line_int, _, _, _ = linregress(phase, mag)
+        except Exception:
+            return result
+
+        mag_fit = line_slope * phase + line_int
+        # Positive residual = observed is brighter than the linear trend
+        residuals = mag_fit - mag
+
+        # --- Step 2: Interpolate to 1-day grid & Gaussian smooth ---
+        phase_grid = np.arange(phase[0], phase[-1] + 1, 1.0)
+        if len(phase_grid) < 10:
+            return result
+        residuals_grid = np.interp(phase_grid, phase, residuals)
+
+        # Apply Gaussian smoothing to kill high-frequency noise
+        from scipy.ndimage import gaussian_filter1d
+        residuals_smooth = gaussian_filter1d(
+            residuals_grid, sigma=PlateauTopographyExtractor.SMOOTH_SIGMA
+        )
+
+        # --- Step 3: Rebrightening via Peak Prominence on smoothed curve ---
+        try:
+            peaks, properties = find_peaks(
+                residuals_smooth,
+                prominence=PlateauTopographyExtractor.MIN_PROMINENCE,
+                width=PlateauTopographyExtractor.MIN_WIDTH_DAYS,
+            )
+
+            if len(peaks) > 0:
+                result['rebrightening_flag'] = True
+                # Report the most prominent peak
+                best_idx = np.argmax(properties['prominences'])
+                result['rebrightening_prominence'] = float(properties['prominences'][best_idx])
+                result['rebrightening_width_days'] = float(properties['widths'][best_idx])
+        except Exception:
             pass
-            
+
+        # --- Step 4: Linear Residual Cluster (on raw, un-smoothed residuals) ---
+        # Flag if ≥3 consecutive raw residuals exceed +0.15 mag
+        cluster_count = 0
+        max_res = 0.0
+        for res in residuals:
+            if res >= 0.15:
+                cluster_count += 1
+                max_res = max(max_res, res)
+                if cluster_count >= 3:
+                    result['linear_residual_flag'] = True
+            else:
+                cluster_count = 0
+        result['linear_residual_max'] = float(max_res) if max_res > 0 else None
+
         return result
+
 
 class PosteriorAnalyzer:
     @staticmethod
@@ -442,7 +494,8 @@ class PriorsVolatilityCheck:
             # Default generic priors if none passed
             prior_dict = {
                 'zams': (15.0, 4.0), 'mloss_rate': (3.0, 1.5), '56Ni': (0.05, 0.03),
-                'k_energy': (1.0, 0.5), 'beta': (3.0, 1.0), 'texp': (10.0, 5.0), 'A_v': (10.0, 5.0)
+                'k_energy': (1.0, 0.5), 'beta': (3.0, 1.0), 'texp': (10.0, 5.0), 'A_v': (10.0, 5.0),
+                'logZ': (-15.0, 10.0)
             }
             
         result = {'prior_deviations': {}, 'volatility_scores': {}}

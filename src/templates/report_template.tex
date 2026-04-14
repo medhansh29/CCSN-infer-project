@@ -11,11 +11,13 @@
 \usepackage{hyperref}
 \usepackage{amsmath}
 \usepackage{caption}
+\usepackage{colortbl}
 
 % Custom Colors & Hyperlink Setup
 \definecolor{outlierred}{RGB}{200,50,50}
 \definecolor{warningorange}{RGB}{200,120,0}
 \definecolor{headerblue}{RGB}{40,80,150}
+\definecolor{mutered}{RGB}{219,112,112}
 \hypersetup{
     colorlinks=true,
     linkcolor=headerblue,
@@ -44,42 +46,194 @@
 \clearpage
 
 % ==========================================
+% SUMMARY
+% ==========================================
+\section{Summary}
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\linewidth]{summary_plots/parameter_scatter_grid.png}
+    \caption*{Parameter Scatter Grid}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\linewidth]{summary_plots/overall_summary.png}
+    \caption*{Overall Summary}
+\end{figure}
+
+\subsection*{Physical Combination Outliers (3D Mahalanobis Clusters)}
+\textit{These multi-dimensional clusters detect events that violate known physics engine correlations. We utilize the Mahalanobis distance to measure how far an event is from the core distribution, natively accounting for covariance. Displayed events exceed the robust 99th percentile ($\chi^2_3$) significance bound.}
+
+\begin{itemize}
+    \item \textbf{Energy Engine ($E_k \times \dot{M} \times ^{56}Ni$):} Isolates explosion engines. E.g., massive kinetic energy without corresponding mass loss implies non-standard compact powering (like Magnetars).
+    \item \textbf{Progenitor Evolution ($ZAMS \times \dot{M} \times \log Z$):} Maps stellar history. E.g., high ZAMS but extremely low mass loss violates standard metallicity-driven wind scaling.
+    \item \textbf{Modeling Degeneracy ($A_V \times t_{\exp} \times \log Z$):} Flags algorithmic confusion where MCMC artificially compensates for low intrinsic metallicity by injecting massive artificial dust extinction ($A_V$).
+    \item \textbf{Ejecta Efficiency ($E_k \times \dot{M} \times \beta$):} Examines kinetic coupling. E.g., highly energetic blasts that fail to accelerate density structures ($\beta$) indicate hidden CSM dampening.
+    \item \textbf{LC Morphology ($t_{\exp} \times ^{56}Ni \times A_V$):} Explores diffusion. Anomalous combinations expose shock-breakout fitting failures disguised as dust gradients.
+\end{itemize}
+
+\begin{longtable}{@{}l p{5.5cm} l l l@{}}
+\toprule
+\textbf{Object Id} & \textbf{Physics Cluster(s)} & \textbf{Max Mahal. Dist} & \textbf{Cluster Count} & \textbf{Model Plot} \\ \midrule
+\endfirsthead
+\toprule
+\textbf{Object Id} & \textbf{Physics Cluster(s)} & \textbf{Max Mahal. Dist} & \textbf{Cluster Count} & \textbf{Model Plot} \\ \midrule
+\endhead
+\bottomrule
+\endfoot
+{multivariate_outliers_rows}\end{longtable}
+
+\begin{figure}[H]
+    \centering
+    \begin{minipage}{0.45\linewidth}
+        \includegraphics[width=\linewidth]{summary_plots/multivariate/energy_engine_corner.png}
+        \caption*{Energy Engine}
+    \end{minipage}\hfill
+    \begin{minipage}{0.45\linewidth}
+        \includegraphics[width=\linewidth]{summary_plots/multivariate/progenitor_evolution_corner.png}
+        \caption*{Progenitor Evolution}
+    \end{minipage}
+\end{figure}
+\begin{figure}[H]
+    \centering
+    \begin{minipage}{0.45\linewidth}
+        \includegraphics[width=\linewidth]{summary_plots/multivariate/modeling_degeneracy_corner.png}
+        \caption*{Modeling Degeneracy}
+    \end{minipage}\hfill
+    \begin{minipage}{0.45\linewidth}
+        \includegraphics[width=\linewidth]{summary_plots/multivariate/ejecta_efficiency_corner.png}
+        \caption*{Ejecta Efficiency}
+    \end{minipage}
+\end{figure}
+
+\subsection*{Bivariate Scatter Plot Outliers (Top 3 per Combination)}
+\textit{These flags highlight extreme residuals off the standard linear trends for specific correlated parameter pairs. Deviations are measured as absolute sigma-distances from the Ordinary Least Squares (OLS) slope.}
+
+\begin{itemize}
+    \item \textbf{Mloss-Ek ($E_k$ vs $\dot{M}$):} Flags Magnetar/CSM deviations where energy severely exceeds expected wind-mass bounds.
+    \item \textbf{Ek-Ni ($^{56}Ni$ vs $E_k$):} Highlights over-luminous Pair-Instability/Fallback signatures that synthesize excessive amounts of Nickel for their energy.
+    \item \textbf{Texp-Beta ($t_{\exp}$ vs $\beta$):} Uncovers diffusion paradoxes where shock breakout timings fail to natively match the ejecta velocity density gradients.
+    \item \textbf{logZ-Av ($A_V$ vs $\log Z$):} Flags local minima where the model erroneously balances extreme external dust against pristine heavy metal atmospheres.
+\end{itemize}
+
+\begin{longtable}{@{}l p{5.5cm} l l l@{}}
+\toprule
+\textbf{Object Id} & \textbf{Outlier Type(s)} & \textbf{Direction} & \textbf{Distance From Trend} & \textbf{Model Plot} \\ \midrule
+\endfirsthead
+\toprule
+\textbf{Object Id} & \textbf{Outlier Type(s)} & \textbf{Direction} & \textbf{Distance From Trend} & \textbf{Model Plot} \\ \midrule
+\endhead
+\bottomrule
+\endfoot
+{scatter_outliers_rows}\end{longtable}
+\clearpage
+
+% ==========================================
 % I. METHODOLOGY & DEFINITIONS
 % ==========================================
 \section{Methodology \& Anomaly Definitions}
-\textit{This section outlines the physical scaling relations, mathematical thresholds, and Bayesian diagnostic criteria used by the automated pipeline to flag anomalous objects.}
+\textit{This section documents the exact calculations, data sources, and statistical thresholds used by the automated pipeline. All ``expected'' values are derived from the current batch's own population regressions, not fixed theoretical constants.}
+
+\subsection*{Data Sources \& Population Construction}
+The pipeline operates on two complementary data streams:
+\begin{itemize}
+    \item \textbf{REFITT MCMC Outputs:} Daily JSON files containing posterior estimates for 7 physical parameters ($ZAMS$, $\dot{M}$, $^{56}Ni$, $E_k$, $\beta$, $t_{\exp}$, $A_v$). The \textbf{final} observation's median posterior is used as the ``ground truth'' for each parameter.
+    \item \textbf{Raw ZTF Photometry (via ALeRCE):} Multi-band light curves fetched independently of REFITT. These are fit with Gaussian Process (GP) regression to extract morphological features without model bias.
+\end{itemize}
+The ``clean population'' used for all benchmarking consists of objects that (a) pass TNS spectroscopic classification as SN~II/IIP, (b) have $\ge 5$ observations, and (c) have successful REFITT fits. All regressions are fit on this population and then applied to predict each individual object's expected values.
 
 \subsection*{Energetic \& Scaling Deviations}
-Flags in this category denote a fundamental violation of the expected mass, energy, or luminosity budget for a standard Type IIP explosion.
+Flags in this category denote a violation of the expected mass, energy, or luminosity budget.
 \begin{itemize}
-    \item \textbf{Luminosity Excess:} The expected plateau magnitude ($M_{exp}$) is calculated via scaling relations based on the inferred $ZAMS$ and explosion energy ($E_k$). An object is flagged if the observed absolute magnitude ($M_{obs}$) deviates significantly: 
-    $|M_{obs} - M_{exp}| > 0.75 \text{ mag}$
-    \item \textbf{Mass Budget Violation:} Evaluates the specific kinetic energy. Flagged if unphysically high for a standard IIP:
-    $(E_k / M_{ej}) > 1.0 \text{ } (10^{51}\text{erg} / M_\odot)$
-    \item \textbf{Nickel Overabundance:} Evaluates the radioactive tail fraction. Flagged if the ratio suggests anomalous radioactive heating:
-    $(M_{Ni} / M_{ej}) > 0.01$
+    \item \textbf{Luminosity Excess} --- \textit{How is $M_{\exp}$ calculated?}
+    \begin{enumerate}
+        \item $M_{\text{obs}}$ ($\equiv M_{\text{plateau, 25d}}$) is the absolute magnitude at $t_{\exp} + 25$ days, extracted from a Gaussian Process fit to the raw ZTF $r$-band light curve. The 25-day offset avoids the shock breakout spike (days 0--10).
+        \item $M_{\exp}$ is predicted via an Ordinary Least Squares (OLS) linear regression trained on the clean population:
+        $$M_{\exp} = \beta_0 + \beta_1 \cdot ZAMS_{\text{final}} + \beta_2 \cdot E_{k,\text{final}}$$
+        where $ZAMS_{\text{final}}$ and $E_{k,\text{final}}$ are the REFITT posterior medians. Missing values are imputed with the population median before prediction.
+        \item \textbf{Flag Condition:} $|M_{\text{obs}} - M_{\exp}| > 0.75$ mag.
+    \end{enumerate}
+
+    \item \textbf{Mass Budget Violation} --- \textit{How is $M_{\text{ej}}$ derived?}
+    \begin{enumerate}
+        \item The ejecta mass is estimated as $M_{\text{ej}} = \max(ZAMS_{\text{final}} - 1.5\,M_\odot, \; 1.0\,M_\odot)$, assuming a $1.5\,M_\odot$ neutron star remnant.
+        \item \textbf{Flag Condition:} $(E_k / M_{\text{ej}}) > 1.0 \;\; [10^{51}\text{erg} / M_\odot]$. Values above this are unphysically energetic for a standard hydrogen recombination plateau.
+    \end{enumerate}
+
+    \item \textbf{Nickel Overabundance}
+    \begin{enumerate}
+        \item Uses the REFITT posterior median for $^{56}Ni_{\text{final}}$ and the derived $M_{\text{ej}}$ above.
+        \item \textbf{Flag Condition:} $(^{56}Ni_{\text{final}} / M_{\text{ej}}) > 0.01$. A radioactive mass fraction exceeding 1\% suggests a non-standard explosion mechanism.
+    \end{enumerate}
 \end{itemize}
 
 \subsection*{Morphological \& Light Curve Outliers}
-Flags in this category track global shape deviations from standard hydrogen recombination models.
+Flags in this category track deviations from the population's plateau duration scaling.
 \begin{itemize}
-    \item \textbf{Extreme Plateau Extension/Truncation:} The observed plateau duration ($t_{obs}$) is compared to the theoretical duration derived from the inferred physical parameters ($t_{exp}$). Flagged if:
-    $|t_{obs} - t_{exp}| > 20 \text{ days}$
+    \item \textbf{Plateau Extension/Truncation} --- \textit{How is $t_{\exp}$ (expected duration) calculated?}
+    \begin{enumerate}
+        \item \textbf{Observed duration} ($t_{\text{obs}}$): From the GP fit on the raw light curve, $t_{\text{fall}}$ is the MJD where $dm/dt$ is maximally positive (epoch of fastest decline $\approx$ end of plateau). Then: $t_{\text{obs}} = t_{\text{fall}} - t_{\exp,\text{REFITT}}$.
+        \item \textbf{Predicted duration} ($t_{\exp}$): Uses the Popov (1993) scaling relation as a regression feature. A proxy variable is computed:
+        $$x = \log_{10}\!\left[\left(\frac{M_{\text{ej}}^3}{E_k}\right)^{0.25}\right]$$
+        An OLS linear regression is trained on the clean population: $t_{\text{pred}} = \alpha_0 + \alpha_1 \cdot x$. This regression is then applied to predict each object's expected plateau length.
+        \item \textbf{Flag Condition:} $|t_{\text{obs}} - t_{\text{pred}}| > 20$ days.
+    \end{enumerate}
 \end{itemize}
 
 \subsection*{Progenitor Environment \& Shock Breakout}
-Flags in this category denote local environmental interactions, specifically eruptive pre-supernova mass loss and early shock interaction with Circumstellar Material (CSM).
+Flags in this category detect pre-explosion mass loss and circumstellar interaction. All features are derived from raw ZTF photometry, not REFITT model outputs.
 \begin{itemize}
-    \item \textbf{Precursor Detection:} A rolling baseline mean ($\mu$) and standard deviation ($\sigma$) are calculated for photometry prior to $t_{exp} - 10$ days. A flag is triggered if the immediate pre-explosion window ($t_{exp} - 10$ to $t_{exp}$) contains $\ge 2$ consecutive detections where $Flux > \mu + 3\sigma$.
-    \item \textbf{Early Rise Excess:} A standard fireball expansion curve ($f \propto t^2$) is fit to the first 3 days of photometry. Flagged if early observations exhibit a $>0.1$ magnitude excess above the $t^2$ fit, indicating shock breakout in dense CSM.
-    \item \textbf{Arrested Cooling:} Measures the early color gradient. Flagged if the ejecta remains artificially blue across the first 15 days ($d(g-r)/dt < 0.04$ mag/day).
+    \item \textbf{Precursor Detection} --- \textit{Exact algorithm:}
+    \begin{enumerate}
+        \item \textbf{Visibility Gate:} If a canonical RSG eruption ($M = -13$ mag) at the object's distance would be fainter than ZTF's limiting magnitude ($m_{\text{lim}} = 20.5$), the scan is skipped.
+        \item \textbf{Baseline Window:} All photometry before $t_{\exp} - 10$ days. Magnitudes are converted to flux ($F = 10^{-0.4m}$). The baseline mean ($\mu$) and standard deviation ($\sigma$) are computed. Requires $\ge 3$ baseline points.
+        \item \textbf{Pre-Peak Window:} Photometry in $[t_{\exp} - 10, \; t_{\exp})$. Requires $\ge 2$ data points.
+        \item \textbf{Flag Condition:} $\ge 2$ \textit{consecutive} flux measurements exceed $\mu + 3\sigma$. A single spike is not sufficient (guards against cosmic rays and subtraction artifacts).
+    \end{enumerate}
+
+    \item \textbf{Early Rise Excess} --- \textit{Exact algorithm:}
+    \begin{enumerate}
+        \item Selects raw photometry in $[t_{\exp}, \; t_{\exp} + 3]$ days. Requires $\ge 3$ points.
+        \item Fits a fireball expansion model $F(t) = a \cdot (t - t_{\exp})^2$ via least-squares.
+        \item Converts the fitted curve back to magnitudes and computes the residual.
+        \item \textbf{Flag Condition:} Any observed data point is $> 0.1$ mag brighter than the $t^2$ prediction (indicates dense CSM interaction during shock breakout).
+    \end{enumerate}
+
+    \item \textbf{Arrested Cooling} --- \textit{Exact algorithm:}
+    \begin{enumerate}
+        \item Selects $g$- and $r$-band photometry within $[t_{\exp}, \; t_{\exp} + 15]$ days.
+        \item Interpolates $r$-band magnitudes to $g$-band epochs. Computes $(g-r)$ color at each epoch.
+        \item Fits a linear regression to $(g-r)$ vs. MJD.
+        \item \textbf{Flag Condition:} Color slope $< 0.04$ mag/day (ejecta remains artificially blue, indicating sustained external heating).
+    \end{enumerate}
 \end{itemize}
 
 \subsection*{Plateau Topography}
-Flags in this category address non-standard behavior during the hydrogen recombination phase.
+Flags in this category address non-standard behavior during the hydrogen recombination phase. The pipeline uses a \textbf{detrending, smoothing, and peak prominence} approach that is hardened against two common false-positive sources.
 \begin{itemize}
-    \item \textbf{Rebrightening Bump:} Identifies periods where flux actively increases during the plateau (days 20-70). Flagged if $dm/dt < 0$ for a contiguous span of $> 5$ days.
-    \item \textbf{Linear Residual Excess:} A simple linear regression is fit to the plateau. Flagged if a contiguous cluster of residuals peaks $\ge 0.1$ magnitudes above the fit.
+    \item \textbf{Rebrightening Bump} --- \textit{Detrending \& Peak Prominence:}
+    \begin{enumerate}
+        \item \textbf{Window Truncation:} Only photometry from days \textbf{20--60} post-explosion is used. The window strictly ends at day 60 to avoid contamination from the radioactive tail onset ($\sim$day 80+). Without this cutoff, late-time dim points drag the regression line downward, creating a phantom ``bump'' in the normal mid-plateau.
+        \item \textbf{Detrend:} A simple OLS linear regression is fit to the dominant-band photometry within this truncated window:
+        $$M_{\text{fit}}(t) = m \cdot t + b$$
+        \item \textbf{Residuals:} The fitted trend is subtracted:
+        $$R(t) = M_{\text{fit}}(t) - M_{\text{obs}}(t)$$
+        A positive residual means the observed magnitude is brighter than the linear trend.
+        \item \textbf{Interpolation \& Smoothing:} The irregularly-sampled residuals are interpolated onto a regular 1-day grid. A \textbf{Gaussian smoothing filter} ($\sigma = 3$ days) is then applied. This destroys 1--2 day noise spikes caused by photometric scatter while perfectly preserving genuine $\ge 15$-day rebrightening structures.
+        \item \textbf{Peak Detection:} \texttt{scipy.signal.find\_peaks} is applied to the \textit{smoothed} residual curve with two strict thresholds:
+        \begin{itemize}
+            \item \textbf{Prominence} $\ge 0.15$ mag --- the peak must rise at least 0.15 mag above the surrounding detrended baseline.
+            \item \textbf{Width} $\ge 10$ days --- the base of the peak must span at least 10 days.
+        \end{itemize}
+        \item \textbf{Flag Condition:} At least one peak satisfying both thresholds. The report records the prominence and width of the strongest peak.
+    \end{enumerate}
+
+    \item \textbf{Linear Residual Cluster:}
+    \begin{enumerate}
+        \item Uses the same detrended residuals $R(t)$ (raw, un-smoothed) from Step 3 above.
+        \item Scans for contiguous runs of data points where $R(t) \ge 0.15$ mag.
+        \item \textbf{Flag Condition:} $\ge 3$ consecutive residuals exceed $+0.15$ mag.
+    \end{enumerate}
 \end{itemize}
 \clearpage
 

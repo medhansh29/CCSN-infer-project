@@ -5,8 +5,10 @@ Create summary visualizations from batch convergence analysis results.
 
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.gridspec import GridSpec
 import numpy as np
 from pathlib import Path
+import seaborn as sns
 import argparse
 import os
 
@@ -44,9 +46,9 @@ def create_summary_plots(metrics_file: str, output_dir: str):
     plt.style.use('seaborn-v0_8-darkgrid')
     
     # Define parameters and titles
-    params = ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v']
+    params = ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v', 'logZ']
     titles = ['ZAMS (Mass)', 'Mass-Loss Rate', '56Ni Mass', 
-              'Explosion Energy', 'Beta', 'Explosion Time', 'Extinction A_V']
+              'Explosion Energy', 'Beta', 'Explosion Time', 'Extinction A_V', 'Metallicity (logZ)']
     
     # ========================================================================
     # 1. N_90 Distribution Plot
@@ -144,7 +146,7 @@ def create_summary_plots(metrics_file: str, output_dir: str):
             
         im = ax.imshow(corr_matrix, cmap='RdBu_r', vmin=-1, vmax=1, aspect='auto')
         
-        short_labels = ['ZAMS', 'M_dot', '56Ni', 'Ek', 'Beta', 'T_exp', 'Av']
+        short_labels = ['ZAMS', 'M_dot', '56Ni', 'Ek', 'Beta', 'T_exp', 'Av', 'logZ']
         valid_labels = [short_labels[i] for i, c in enumerate(n90_cols) if c in valid_cols]
         
         ax.set_xticks(range(len(valid_labels)))
@@ -188,7 +190,7 @@ def create_summary_plots(metrics_file: str, output_dir: str):
             
         im = ax.imshow(corr_matrix, cmap='RdBu_r', vmin=-1, vmax=1, aspect='auto')
         
-        short_labels = ['ZAMS', 'M_dot', '56Ni', 'Ek', 'Beta', 'T_exp', 'Av']
+        short_labels = ['ZAMS', 'M_dot', '56Ni', 'Ek', 'Beta', 'T_exp', 'Av', 'logZ']
         valid_labels = [short_labels[i] for i, c in enumerate(final_cols) if c in valid_cols]
         
         ax.set_xticks(range(len(valid_labels)))
@@ -222,7 +224,7 @@ def create_summary_plots(metrics_file: str, output_dir: str):
     fig = plt.figure(figsize=(15, 13))
     gs = fig.add_gridspec(4, 2, hspace=0.35, wspace=0.3)
     
-    short_labels = ['ZAMS', 'M_dot', '56Ni', 'Ek', 'Beta', 'T_exp', 'Av']
+    short_labels = ['ZAMS', 'M_dot', '56Ni', 'Ek', 'Beta', 'T_exp', 'Av', 'logZ']
     
     # Convergence rates
     ax1 = fig.add_subplot(gs[0, :])
@@ -281,7 +283,7 @@ def create_summary_plots(metrics_file: str, output_dir: str):
     ax5 = fig.add_subplot(gs[2, :])
     unc_cols = ['zams_rel_uncertainty', 'mloss_rate_rel_uncertainty', '56Ni_rel_uncertainty',
                 'k_energy_rel_uncertainty', 'beta_rel_uncertainty', 'texp_rel_uncertainty', 
-                'A_v_rel_uncertainty']
+                'A_v_rel_uncertainty', 'logZ_rel_uncertainty']
     avg_unc = []
     
     for col in unc_cols:
@@ -532,17 +534,12 @@ def create_summary_plots(metrics_file: str, output_dir: str):
     # Use the already combined dataframe for plotting
     merged = df.copy()
 
-    # Define the 6 scatter panels to match the reference figure layout
-    # Row 1: ZAMS vs (56Ni, mloss_rate, k_energy)
-    # Row 2: k_energy vs (texp, 56Ni, A_v)
     scatter_panels = [
         # (x_param, y_param, x_label, y_label)
-        ('56Ni_final',       'zams_final',      r'$^{56}$Ni (M$_\odot$)',           r'ZAMS (M$_\odot$)'),
-        ('mloss_rate_final', 'zams_final',      r'$-\log_{10}\dot{M}$ (M$_\odot$ yr$^{-1}$)', r'ZAMS (M$_\odot$)'),
-        ('k_energy_final',   'zams_final',      r'$E_k$ ($10^{51}$ erg)',           r'ZAMS (M$_\odot$)'),
-        ('texp_final',       'k_energy_final',  r'$t_{\mathrm{exp}}$ (day)',        r'$E_k$ ($10^{51}$ erg)'),
-        ('56Ni_final',       'k_energy_final',  r'$^{56}$Ni (M$_\odot$)',           r'$E_k$ ($10^{51}$ erg)'),
-        ('A_v_final',        'k_energy_final',  r'$A_V$ (mag)',                     r'$E_k$ ($10^{51}$ erg)'),
+        ('mloss_rate_final', 'k_energy_final',  r'$-\log_{10}\dot{M}$ (M$_\odot$ yr$^{-1}$)', r'$E_k$ ($10^{51}$ erg)'),
+        ('k_energy_final',   '56Ni_final',      r'$E_k$ ($10^{51}$ erg)',           r'$^{56}$Ni (M$_\odot$)'),
+        ('texp_final',       'beta_final',      r'$t_{\mathrm{exp}}$ (day)',        r'$\beta$'),
+        ('logZ_final',       'A_v_final',       r'$\log Z$ (Metallicity)',          r'$A_V$ (mag)'),
     ]
 
     # REFITT parameter bounds (dashed reference lines)
@@ -555,18 +552,18 @@ def create_summary_plots(metrics_file: str, output_dir: str):
         'A_v_final':       (0.0, None),
     }
 
-    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+    fig, axes = plt.subplots(2, 2, figsize=(14, 12))
     marker_color = '#e74c71'   # Pink-red like the reference
     edge_color = '#8b0000'
 
     # Try to load outliers
     try:
-        outliers_df = pd.read_csv('scatter_outliers.csv')
+        outliers_df = pd.read_csv('data/scatter_outliers.csv')
     except Exception:
         outliers_df = None
 
     for idx, (x_col, y_col, x_label, y_label) in enumerate(scatter_panels):
-        row, col_idx = divmod(idx, 3)
+        row, col_idx = divmod(idx, 2)
         ax = axes[row][col_idx]
 
         if x_col in merged.columns and y_col in merged.columns:
@@ -667,7 +664,85 @@ def create_summary_plots(metrics_file: str, output_dir: str):
     print(f"✅ Saved: {output_dir}/parameter_scatter_grid.png")
     plt.close()
 
+    create_multivariate_corner_plots(merged, output_dir, outliers_df)
+
     print(f"\n✨ All summary plots created in: {output_dir}/")
+
+def create_multivariate_corner_plots(df: pd.DataFrame, output_dir: str, outliers_df: pd.DataFrame = None):
+    """Generates 3-factor pairplots for specific physics clusters."""
+    if outliers_df is None or outliers_df.empty:
+        return
+        
+    clusters = {
+        "Energy Engine": [('k_energy_final', r'$E_k$ ($10^{51}$ erg)'), 
+                          ('mloss_rate_final', r'$-\log_{10}\dot{M}$'), 
+                          ('56Ni_final', r'$^{56}$Ni (M$_\odot$)')],
+        "Progenitor Evolution": [('zams_final', r'ZAMS (M$_\odot$)'), 
+                                 ('mloss_rate_final', r'$-\log_{10}\dot{M}$'), 
+                                 ('logZ_final', r'logZ')],
+        "Modeling Degeneracy": [('A_v_final', r'$A_V$ (mag)'), 
+                                ('texp_final', r'$t_{\mathrm{exp}}$ (day)'), 
+                                ('logZ_final', r'logZ')],
+        "Ejecta Efficiency": [('k_energy_final', r'$E_k$ ($10^{51}$ erg)'), 
+                              ('mloss_rate_final', r'$-\log_{10}\dot{M}$'), 
+                              ('beta_final', r'$\beta$')],
+        "LC Morphology": [('texp_final', r'$t_{\mathrm{exp}}$ (day)'), 
+                          ('56Ni_final', r'$^{56}$Ni (M$_\odot$)'), 
+                          ('A_v_final', r'$A_V$ (mag)')]
+    }
+    
+    Path(f'{output_dir}/multivariate').mkdir(exist_ok=True, parents=True)
+    
+    for cluster_name, axes_params in clusters.items():
+        params = [p[0] for p in axes_params]
+        labels = [p[1] for p in axes_params]
+        
+        missing = [p for p in params if p not in df.columns]
+        if missing:
+            continue
+            
+        plot_data = df[['object_id'] + params].dropna()
+        if len(plot_data) == 0:
+            continue
+            
+        # Get outliers for this cluster
+        cluster_outliers = outliers_df[outliers_df['outlier_type'] == cluster_name]
+        outlier_oids = cluster_outliers['object_id'].tolist() if not cluster_outliers.empty else []
+        
+        # We rename columns to use the labels for seaborn
+        plot_data = plot_data.rename(columns=dict(zip(params, labels)))
+        
+        # Create PairGrid
+        g = sns.PairGrid(plot_data[labels], corner=True, diag_sharey=False)
+        
+        # Mapping properties
+        g.map_diag(sns.histplot, color="steelblue", kde=True, bins=15)
+        g.map_lower(sns.kdeplot, cmap="Blues", fill=True, bw_adjust=1.2, alpha=0.6)
+        
+        # Draw the scatter plot over the KDE plots
+        g.map_lower(sns.scatterplot, s=30, color="k", alpha=0.3, edgecolor="white")
+        
+        # Overlay Outliers if there are any
+        if outlier_oids:
+            out_data = plot_data[plot_data['object_id'].isin(outlier_oids)]
+            # We must overlay them on the off-diagonal plots
+            for idx_y in range(1, len(labels)):
+                for idx_x in range(idx_y):
+                    ax = g.axes[idx_y, idx_x]
+                    # Plot diamond markers
+                    ax.scatter(out_data[labels[idx_x]], out_data[labels[idx_y]], 
+                               c='red', marker='D', s=100, edgecolors='black', linewidth=1.5, zorder=10)
+                    for _, row in out_data.iterrows():
+                        ax.annotate(row['object_id'], (row[labels[idx_x]], row[labels[idx_y]]), 
+                                    xytext=(5, 5), textcoords='offset points', fontsize=8, color='red', fontweight='bold', zorder=11)
+        
+        g.fig.suptitle(f'Multivariate Physics Cluster: {cluster_name}', fontsize=16, fontweight='bold', y=1.02)
+        
+        safe_name = cluster_name.replace(" ", "_").lower()
+        plt.savefig(f'{output_dir}/multivariate/{safe_name}_corner.png', dpi=150, bbox_inches='tight')
+        plt.close()
+        
+    print(f"✅ Generated corner pairplots for multivariate clusters.")
 
 if __name__ == "__main__":
     create_summary_plots('data/convergence_metrics.csv', 'data/summary_plots')

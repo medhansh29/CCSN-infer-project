@@ -4,7 +4,7 @@ A modular pipeline for analyzing Core-Collapse Supernova (CCSN) parameter conver
 
 ## Overview
 
-REFITT produces daily inference outputs for active ZTF transients, each containing posterior estimates for 7 physical parameters (ZAMS mass, mass-loss rate, ⁵⁶Ni mass, kinetic energy, density profile slope, explosion time, and dust extinction). This pipeline tracks these parameters over time to answer: **how quickly and reliably does the model converge to the correct answer?**
+REFITT produces daily inference outputs for active ZTF transients, each containing posterior estimates for 8 physical parameters (ZAMS mass, mass-loss rate, ⁵⁶Ni mass, kinetic energy, density profile β, explosion time, dust extinction, and metallicity logZ). This pipeline tracks these parameters over time to answer: **how quickly and reliably does the model converge to the correct answer?**
 
 ### What the Pipeline Does
 
@@ -12,9 +12,10 @@ REFITT produces daily inference outputs for active ZTF transients, each containi
 2. **Filters** out contaminating objects (SN IIn, SN IIb) using official TNS spectroscopic classifications
 3. **Validates** light curve completeness based on the model's Phase parameter
 4. **Computes** convergence metrics (N₉₀, volatility), prediction residuals, and parameter uncertainties
-5. **Generates** per-object trajectory plots and batch summary visualizations
-6. **Detects** mathematical and physical anomalies (ML & Rule-based alerts)
-7. **Compiles** a comprehensive PDF diagnostic report with interactive navigation and actionable review items
+5. **Detects** bivariate (2D trendline) and multivariate (3D Mahalanobis) parameter outliers
+6. **Generates** per-object trajectory plots, batch summary visualizations, and seaborn corner pairplots
+7. **Detects** mathematical and physical anomalies (ML & Rule-based alerts)
+8. **Compiles** a comprehensive PDF diagnostic report with interactive navigation, model plot links, and actionable review items
 
 ---
 
@@ -128,9 +129,10 @@ refitt-ccsn-infer/
 │   ├── feature_extractors.py          # Physics engine: GP extraction, mass budget, anomalies
 │   ├── compare_successive_observations.py # Convergence: N₉₀, volatility, trajectory plots
 │   ├── lightcurve_completeness.py     # LC validation: Phase-based completeness gating
+│   ├── multivariate_outliers.py       # Outlier detection: 2D bivariate + 3D Mahalanobis
 │   ├── alerce_client.py               # Raw data: Fetches ZTF lightcurves via ALeRCE API
 │   ├── tns_classifier.py              # Filtering: TNS spectroscopic classification
-│   ├── create_summary_plots.py        # Visualization: Batch summary plots
+│   ├── create_summary_plots.py        # Visualization: Batch summary + seaborn corner plots
 │   ├── report_generator.py            # Reporting: PDF diagnostic report generator
 │   └── templates/
 │       └── report_template.tex        # LaTeX template for the diagnostic PDF
@@ -138,12 +140,14 @@ refitt-ccsn-infer/
 ├── data/                              # PIPELINE OUTPUT DIRECTORY
 │   ├── convergence_metrics.csv        # OUTPUT: main metrics, features, and flags
 │   ├── uncertainty_metrics.csv        # OUTPUT: per-parameter posterior diagnostics
+│   ├── scatter_outliers.csv           # OUTPUT: bivariate + multivariate outlier flags
 │   ├── flagged_non_iip_objects.csv    # OUTPUT: TNS-excluded objects
 │   ├── diagnostic_report.pdf          # OUTPUT: auto-generated PDF diagnostic report
 │   ├── diagnostic_report.tex          # OUTPUT: generated LaTeX source
 │   ├── report_images/                 # OUTPUT: per-OID diagnostic packages
 │   │   └── {OID}_{run_date}/          #   Subfolders with plots + raw parameter JSONs
 │   └── summary_plots/                 # OUTPUT: batch summary visualizations
+│       └── multivariate/              #   Seaborn corner pairplots per physics cluster
 │
 ├── convergence_plots/                 # OUTPUT: per-object trajectory plots
 │
@@ -155,7 +159,7 @@ refitt-ccsn-infer/
 
 ## Pipeline Output
 
-The pipeline produces **three primary CSVs**, a PDF report, a diagnostic metadata package, and two optional plot directories.
+The pipeline produces **four primary CSVs**, a PDF report, a diagnostic metadata package, and two optional plot directories.
 
 ### 1. `convergence_metrics.csv`
 
@@ -166,13 +170,13 @@ The primary output. One row per analyzed object.
 | **Identifiers**             | `object_id`                                                                                                                 | ZTF object ID                                             |
 | **Frequency**               | `total_runs`, `avg_interval_days`, `min_interval_days`, `max_interval_days`, `first_run`, `last_run`                        | How often REFITT ran inference on this object             |
 | **Phase**                   | `phase_start`, `phase_end`, `phase_span`                                                                                    | Observation time range (days since explosion)             |
-| **Convergence (×7 params)** | `zams_n90_days`, `zams_converged`, `zams_final`                                                                            | N₉₀: days until parameter stays within 10% of final value        |
+| **Convergence (×8 params)** | `zams_n90_days`, `zams_converged`, `zams_final`                                                                            | N₉₀: days until parameter stays within 10% of final value        |
 | **Morphological (GP)**     | `M_plateau_25d`, `gp_t_fall`, `gp_t_rise`, `gp_gr_slope`, `plateau_duration_days`                                          | Derived from ALeRCE raw lightcurves                              |
 | **Mass & Physics**         | `implied_Mej`, `mass_budget_violation`, `prior_pegged`, `is_bimodal`                                                       | Kinetic energy vs ejecta mass and MCMC posterior diagnostics     |
 | **Precursor Activity**     | `precursor_status`, `precursor_flag`, `precursor_snr_max`                                                                  | Integration across $[-80, -20]$d window                         |
 | **Benchmarking**           | `M_peak_residual`, `plateau_duration_residual`, `is_anomaly`, `population_deviation_score`                                 | Deviation from batch-wide scaling relations and Isolation Forest |
 
-The 7 parameters are: `zams`, `mloss_rate`, `56Ni`, `k_energy`, `beta`, `texp`, `A_v`.
+The 8 tracked parameters are: `zams`, `mloss_rate`, `56Ni`, `k_energy`, `beta`, `texp`, `A_v`, `logZ`.
 
 ### 2. `uncertainty_metrics.csv`
 
@@ -196,12 +200,30 @@ Objects excluded from analysis because their TNS spectroscopic type is not SN II
 | `tns_type`    | Spectroscopic type (SN IIn, SN IIb, etc.)   |
 | `flag_reason` | Human-readable reason for exclusion         |
 
+### 4. `scatter_outliers.csv`
+
+Combined bivariate and multivariate outlier flags. One row per outlier detection per object.
+
+| Column              | Description                                                        |
+| :------------------ | :----------------------------------------------------------------- |
+| `object_id`         | ZTF object ID                                                      |
+| `outlier_type`      | Detection category (e.g., `Mloss-Ek`, `Energy Engine`)             |
+| `x_param_name`      | X-axis parameter column name                                       |
+| `y_param_name`      | Y-axis parameter column name                                       |
+| `distance_from_trend` | Sigma-distance (2D) or Mahalanobis distance (3D) from population |
+| `direction`         | Above/Below trendline (2D) or chi-squared significance (3D)        |
+
+**Bivariate (2D) combinations:** `Mloss-Ek`, `Ek-Ni`, `Texp-Beta`, `logZ-Av`
+
+**Multivariate (3D Mahalanobis) clusters:** `Energy Engine`, `Progenitor Evolution`, `Modeling Degeneracy`, `Ejecta Efficiency`, `LC Morphology`
+
 ### Diagnostic Report (`data/diagnostic_report.pdf`)
 
 The automated PDF report provides a comprehensive anomaly analysis with the following sections:
 
 | Section                          | Contents                                                                                     |
 | :------------------------------- | :------------------------------------------------------------------------------------------- |
+| **Summary**                      | Parameter scatter grids, 3D Mahalanobis cluster table, bivariate outlier table, corner plots |
 | **I. Methodology & Definitions** | Mathematical definitions and thresholds for all anomaly categories                           |
 | **II. Energetic Deviations**     | Ledger of objects with luminosity excesses, mass budget violations, or nickel overabundance   |
 | **III. Morphological Outliers**  | Ledger of objects with extreme plateau length extensions or truncations                      |
@@ -214,6 +236,7 @@ The automated PDF report provides a comprehensive anomaly analysis with the foll
 **Report Features:**
 - **Interactive Navigation**: TOC links jump to deep-dive profiles; profiles link back to their summary ledger
 - **ALeRCE Integration**: Object IDs in profiles link directly to the ALeRCE explorer
+- **Model Plot Links**: Clickable `View Plot` links in outlier tables open the model absolute magnitude plots directly
 - **Actionable Diagnostics**: Each profile includes specific "Required Review Actions" tailored to its anomaly flags
 - **Processing Timestamps**: Each profile displays the source run folder for temporal context
 
@@ -297,7 +320,7 @@ Date directories (2025-10-31/, 2025-11-01/, ...)
 ## Detailed Methodology
 
 ### 1. Parameter Convergence ($N_{90}$)
-**$N_{90}$** is defined as the number of days from the first observation until a physical parameter enters and remains within a ±10% threshold of its final (latest) value.
+**$N_{90}$** is defined as the number of days from the first observation until a physical parameter enters and remains within an absolute tolerance band of its final (latest) value. The tolerance is computed as `abs(final_value × 0.10)`, which correctly handles parameters that can be negative (such as `logZ`, where multiplicative percentage bounds produce inverted intervals).
 - **Population Baseline**: Since REFITT fits can be volatile in early phases, $N_{90}$ is only considered "Validated" if the final observation phase is $\ge 100$ days (radioactive tail phase).
 - **Stability**: A parameter is marked as `converged` only if it maintains this threshold for all subsequent observations in the indexed timeline.
 
@@ -327,14 +350,21 @@ The **Aggregator** uses an Isolation Forest trained on the **morphological featu
 - **Morphological Space**: Includes $M_{\text{plateau, 25d}}$, $t_{\text{fall}}$, $g-r$ slope, and Lag-1 Autocorrelation of residuals.
 - **Population Deviation Score**: The Euclidean distance of an object from the batch centroid in the standardized (Z-scored) morphological feature space.
 
-### 7. Diagnostic Report Generation
+### 7. Bivariate & Multivariate Outlier Detection
+The pipeline runs two complementary outlier detectors after batch analysis:
+- **Bivariate (2D)**: For each of 4 physics-motivated parameter pairs (`Mloss-Ek`, `Ek-Ni`, `Texp-Beta`, `logZ-Av`), an OLS trendline is fit and the top-5 sigma-distance deviations are flagged.
+- **Multivariate (3D Mahalanobis)**: For each of 5 physics clusters (e.g., Energy Engine = $E_k × \dot{M} × ^{56}Ni$), the Mahalanobis distance from the population centroid is computed using the inverse covariance matrix. Events exceeding the $\chi^2_3$ 99th percentile bound are flagged.
+
+Both detectors write to `data/scatter_outliers.csv`. The report generator deduplicates by OID, merging multi-category detections into single rows with comma-separated type labels.
+
+### 8. Diagnostic Report Generation
 The report generator loads `convergence_metrics.csv` and applies category-specific thresholds:
 - **Energetic Deviations**: $|M_{\text{obs}} - M_{\text{exp}}| > 0.75$ mag, $E_k/M_{\text{ej}} > 1.0$, $M_{\text{Ni}}/M_{\text{ej}} > 0.01$
 - **Morphological Outliers**: $|t_{\text{obs}} - t_{\text{exp}}| > 20$ days
 - **Progenitor Environment**: $>3\sigma$ precursor flux, $>0.1$ mag early rise excess, arrested cooling
 - **Plateau Topography**: Rebrightening bumps ($dm/dt < 0$ for $>5$ days), linear residual clusters ($\ge 0.1$ mag)
 
-All flagged objects receive a deep-dive profile with actionable review instructions and best-fit plot rendering. Plots and raw JSONs are collected into `data/report_images/{OID}_{run_date}/` subfolders for offline inspection.
+All flagged objects receive a deep-dive profile with actionable review instructions and best-fit plot rendering. Plots and raw JSONs are collected into `data/report_images/{OID}_{run_date}/` subfolders for offline inspection. Outlier tables include clickable `View Plot` links (via `file://` URIs) that open the model absolute magnitude plots directly from the PDF.
 
 ---
 
@@ -345,13 +375,18 @@ All flagged objects receive a deep-dive profile with actionable review instructi
 CLI entrypoint. Runs the complete 4-step pipeline: index → analyze → visualize → report. All steps are orchestrated here with error handling and timing.
 
 ### `src/report_generator.py`
-Loads the LaTeX template from `src/templates/report_template.tex`, populates it with data from `convergence_metrics.csv` and `flagged_non_iip_objects.csv`, copies diagnostic plots and JSONs into `data/report_images/`, and compiles the final `data/diagnostic_report.pdf` via `pdflatex`.
+Loads the LaTeX template from `src/templates/report_template.tex`, populates it with data from `convergence_metrics.csv`, `scatter_outliers.csv`, and `flagged_non_iip_objects.csv`, copies diagnostic plots and JSONs into `data/report_images/`, and compiles the final `data/diagnostic_report.pdf` via `pdflatex`. Includes `ensure_model_plot()` which copies model absolute magnitude plots for all outlier OIDs and generates clickable `file://` links in the PDF tables.
 
 ### `src/templates/report_template.tex`
-The standalone LaTeX template for the diagnostic PDF. Uses Roman numeral sectioning, `longtable` for multi-page ledgers, and `float` package `[H]` placement for anchored figures. Editable independently of the Python code.
+The standalone LaTeX template for the diagnostic PDF. Uses Roman numeral sectioning, `longtable` for multi-page ledgers, and `float` package `[H]` placement for anchored figures. Includes physics-motivated explanations for each 3D Mahalanobis cluster and 2D bivariate combination. Editable independently of the Python code.
 
 ### `src/feature_extractors.py`
-The "Physics Engine" of the pipeline. Implements all advanced feature extraction classes including `GPMorphologicalExtractor` (absolute magnitudes, color slopes), `PrecursorScan` (integrated pre-explosion flux), and the `Aggregator` (population-level Benchmarking and Isolation Forest anomaly detection).
+The "Physics Engine" of the pipeline. Implements all advanced feature extraction classes including `GPMorphologicalExtractor` (absolute magnitudes, color slopes), `PrecursorScan` (integrated pre-explosion flux), `PriorsVolatilityCheck` (prior deviation scores for all 8 parameters including `logZ`), and the `Aggregator` (population-level Benchmarking and Isolation Forest anomaly detection).
+
+### `src/multivariate_outliers.py`
+Dual-mode outlier detector:
+- **`BivariateOutlierDetector`**: Fits OLS trendlines across 4 physics-motivated parameter pairs and flags the top-5 sigma-distance deviations per combination.
+- **`MultivariateOutlierDetector`**: Computes Mahalanobis distances in 5 three-dimensional physics clusters using the inverse covariance matrix, flagging events exceeding the χ²₃ 99th percentile.
 
 ### `src/alerce_client.py`
 A robust client for fetching raw ZTF lightcurves from the ALeRCE API. Used by the GP extractions to supplement REFITT's model-processed data with raw observations for accurate morphological analysis.
@@ -359,12 +394,16 @@ A robust client for fetching raw ZTF lightcurves from the ALeRCE API. Used by th
 ### `src/compare_successive_observations.py`
 Core convergence analyzer. For each object, it:
 1. Loads the chronological timeline of JSON observations
-2. Extracts the 7 physical parameters at each epoch
-3. Computes N₉₀ (days to convergence) and volatility metrics
-4. Generates multi-panel trajectory plots showing parameter stabilization
+2. Extracts the 8 physical parameters (including `logZ`) at each epoch
+3. Computes N₉₀ (days to convergence) using absolute tolerance bounds (correctly handles negative parameters)
+4. Computes volatility metrics (std, mean absolute change, max jump)
+5. Generates multi-panel trajectory plots showing parameter stabilization
+
+### `src/create_summary_plots.py`
+Batch-level visualization engine. Generates convergence distributions, volatility boxplots, parameter correlations, relative uncertainties, and a targeted 2×2 parameter scatter grid matching the 4 bivariate outlier combinations. Also produces seaborn `PairGrid` corner pairplots (with KDE densities and scatter overlays) for each 3D Mahalanobis physics cluster.
 
 ### `src/batch_analyze_objects.py`
-The main orchestrator. For each object: loads data via `JSONFetcher`, runs TNS filtering, checks light curve completeness, executes the `feature_extractors`, and computes run frequency. It writes the primary CSV outputs and coordinates the batch-level `Aggregator` logic.
+The main orchestrator. For each object: loads data via `JSONFetcher`, runs TNS filtering, checks light curve completeness, executes the `feature_extractors`, and computes run frequency. It writes the primary CSV outputs, runs both `BivariateOutlierDetector` and `MultivariateOutlierDetector`, and coordinates the batch-level `Aggregator` logic.
 
 ---
 

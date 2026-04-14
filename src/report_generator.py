@@ -12,6 +12,24 @@ def escape_latex(s):
     if not isinstance(s, str): return s
     return s.replace('_', r'\_').replace('%', r'\%').replace('&', r'\&').replace('$', r'\$')
 
+def ensure_model_plot(oid, base_dir='.'):
+    """Copy the latest model_absolute_nn plot for an OID into data/report_images/ and return its absolute file URI."""
+    dates = sorted([d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d)) and d.startswith('202')])
+    img_dir = os.path.join(base_dir, 'data', 'report_images')
+    for d in reversed(dates):
+        ap = os.path.join(base_dir, d, f"{oid}_model_absolute_nn.png")
+        if os.path.exists(ap):
+            sub_img_dir = f"{oid}_{d}"
+            full_target_dir = os.path.join(img_dir, sub_img_dir)
+            os.makedirs(full_target_dir, exist_ok=True)
+            target_path = os.path.join(full_target_dir, f"{oid}_lc.png")
+            if not os.path.exists(target_path):
+                shutil.copy(ap, target_path)
+            # Return absolute path so the PDF hyperlink works on macOS
+            abs_path = os.path.abspath(target_path).replace(' ', '%20')
+            return abs_path
+    return None
+
 def generate_report():
     try:
         df = pd.read_csv('data/convergence_metrics.csv')
@@ -39,6 +57,75 @@ def generate_report():
         filtered_rows = "\n".join(f_list)
     except:
         filtered_rows = r"N/A & N/A & N/A \\"
+
+    scatter_outliers_rows = ""
+    multivariate_outliers_rows = ""
+    try:
+        odf = pd.read_csv('data/scatter_outliers.csv')
+        
+        clusters = ["Energy Engine", "Progenitor Evolution", "Modeling Degeneracy", 
+                    "Ejecta Efficiency", "LC Morphology"]
+                    
+        # Multi-Variate (3D) Processing
+        odf_3d = odf[odf['outlier_type'].isin(clusters)].copy()
+        if not odf_3d.empty:
+            # Take top 3 per cluster, then group by OID to merge duplicates
+            odf_3d = odf_3d.sort_values(by='distance_from_trend', ascending=False)
+            top_odf_3d = odf_3d.groupby('outlier_type').head(3).copy()
+            
+            # Group by object_id: merge types, keep max distance
+            grouped_3d = top_odf_3d.groupby('object_id').agg(
+                types=('outlier_type', lambda x: ', '.join(sorted(x.unique()))),
+                max_dist=('distance_from_trend', 'max'),
+                n_types=('outlier_type', 'nunique')
+            ).reset_index().sort_values('max_dist', ascending=False)
+            
+            m_list = []
+            for _, grow in grouped_3d.iterrows():
+                oid = grow['object_id']
+                otype = grow['types']
+                dist = float(grow['max_dist'])
+                rcolor = r"\rowcolor{mutered} " if grow['n_types'] > 1 else ""
+                plot_path = ensure_model_plot(oid)
+                link_str = rf"\href{{file:///{plot_path}}}{{View Plot}}" if plot_path else "N/A"
+                m_list.append(rf"{rcolor}\alerce{{{escape_latex(oid)}}} & {otype} & {dist:.2f} & {grow['n_types']} clusters & {link_str} \\")
+            multivariate_outliers_rows = "\n".join(m_list)
+        else:
+            multivariate_outliers_rows = r"N/A & N/A & N/A & N/A & N/A \\"
+            
+        # Bi-Variate (2D) Processing
+        odf_2d = odf[~odf['outlier_type'].isin(clusters)].copy()
+        if not odf_2d.empty:
+            # Take top 3 per combo, then group by OID
+            odf_2d = odf_2d.sort_values(by='distance_from_trend', ascending=False)
+            top_odf_2d = odf_2d.groupby('outlier_type').head(3).copy()
+            
+            # Group by object_id: merge types, keep max distance
+            grouped_2d = top_odf_2d.groupby('object_id').agg(
+                types=('outlier_type', lambda x: ', '.join(sorted(x.unique()))),
+                max_dist=('distance_from_trend', 'max'),
+                n_types=('outlier_type', 'nunique'),
+                direction=('direction', 'first')
+            ).reset_index().sort_values('max_dist', ascending=False)
+            
+            o_list = []
+            for _, grow in grouped_2d.iterrows():
+                oid = grow['object_id']
+                otype = grow['types'].replace('_', r'\_')
+                direction = str(grow['direction'])
+                dist = float(grow['max_dist'])
+                rcolor = r"\rowcolor{mutered} " if grow['n_types'] > 1 else ""
+                plot_path = ensure_model_plot(oid)
+                link_str = rf"\href{{file:///{plot_path}}}{{View Plot}}" if plot_path else "N/A"
+                o_list.append(rf"{rcolor}\alerce{{{escape_latex(oid)}}} & {otype} & {direction} & {dist:.3f} & {link_str} \\")
+            scatter_outliers_rows = "\n".join(o_list)
+        else:
+            scatter_outliers_rows = r"N/A & N/A & N/A & N/A & N/A \\"
+            
+    except Exception as e:
+        print(f"Error loading scatter outliers: {e}")
+        scatter_outliers_rows = r"N/A & N/A & N/A & N/A \\"
+        multivariate_outliers_rows = r"N/A & N/A & N/A & N/A \\"
 
     df = df[df['fit_success'].isin([True, 'True'])]
     THRESHOLD = 5 
@@ -101,22 +188,22 @@ def generate_report():
             if cat1_budget: flags.append(r"\textcolor{warningorange}{Mass Budget ($E_k/M_{ej}>1$)}")
             if cat1_ni: flags.append(r"\textcolor{warningorange}{Nickel Overabundance (>1\%)}")
             z_ek = row.get('zams_final', 15) / max(row.get('k_energy_final', 1), 0.1)
-            cat1_list.append(rf"\alerce{{{oid}}} & {m_obs:.2f} & {m_exp:.2f} & {z_ek:.2f} & {' + '.join(flags)} \\")
+            cat1_list.append(rf"\hyperref[sec:{oid}]{{{escape_latex(oid)}}} & {m_obs:.2f} & {m_exp:.2f} & {z_ek:.2f} & {' + '.join(flags)} \\")
 
         if cat2_ext:
-            cat2_list.append(rf"\alerce{{{oid}}} & {t_obs:.1f} & {t_exp:.1f} & \textcolor{{outlierred}}{{{t_diff:+.1f} days}} \\")
+            cat2_list.append(rf"\hyperref[sec:{oid}]{{{escape_latex(oid)}}} & {t_obs:.1f} & {t_exp:.1f} & \textcolor{{outlierred}}{{{t_diff:+.1f} days}} \\")
 
         if prec or rise or cool:
             p_s = r"\textcolor{outlierred}{Detected}" if prec else "None"
             r_s = r"\textcolor{warningorange}{Excess}" if rise else "Normal"
             c_s = r"\textcolor{warningorange}{Arrested}" if cool else "Normal"
             prim = "Precursor" if prec else ("CSM Breakout" if rise else "CSM Interaction")
-            cat3_list.append(rf"\alerce{{{oid}}} & {p_s} & {r_s} & {c_s} & {prim} \\")
+            cat3_list.append(rf"\hyperref[sec:{oid}]{{{escape_latex(oid)}}} & {p_s} & {r_s} & {c_s} & {prim} \\")
 
         if reb or lin:
             r_s = r"\textcolor{outlierred}{Yes}" if reb else "No"
             l_s = r"\textcolor{warningorange}{Detected}" if lin else "No"
-            cat4_list.append(rf"\alerce{{{oid}}} & {r_s} & {l_s} \\")
+            cat4_list.append(rf"\hyperref[sec:{oid}]{{{escape_latex(oid)}}} & {r_s} & {l_s} \\")
 
         p_reasons = []
         action_items = []
@@ -201,6 +288,9 @@ def generate_report():
 
     report_tex = report_template.replace("{run_date}", datetime.now().strftime("%Y-%m-%d"))
     report_tex = report_tex.replace("{total_objects}", str(len(reliable_df)))
+    report_tex = report_tex.replace('{flagged_limit_rows}', filtered_rows)
+    report_tex = report_tex.replace('{scatter_outliers_rows}', scatter_outliers_rows if scatter_outliers_rows else r"N/A & N/A & N/A & N/A \\")
+    report_tex = report_tex.replace('{multivariate_outliers_rows}', multivariate_outliers_rows if multivariate_outliers_rows else r"N/A & N/A & N/A & N/A \\")
     report_tex = report_tex.replace("{cat1_rows}", "\n".join(cat1_list) if cat1_list else r"N/A & N/A & N/A & N/A & N/A \\")
     report_tex = report_tex.replace("{cat2_rows}", "\n".join(cat2_list) if cat2_list else r"N/A & N/A & N/A & N/A \\")
     report_tex = report_tex.replace("{cat3_rows}", "\n".join(cat3_list) if cat3_list else r"N/A & N/A & N/A & N/A & N/A \\")

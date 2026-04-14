@@ -56,8 +56,9 @@ class ConvergenceAnalyzer:
             }
         
         final_value = values.iloc[-1]
-        lower_bound = final_value * (1 - tolerance)
-        upper_bound = final_value * (1 + tolerance)
+        tolerance_val = abs(final_value * tolerance)
+        lower_bound = final_value - tolerance_val
+        upper_bound = final_value + tolerance_val
         
         # Find first index where value enters 10% band and stays there
         n90_idx = None
@@ -194,7 +195,7 @@ class ConvergenceAnalyzer:
             save_path: Optional path to save figure
         """
         if params is None:
-            params = ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v']
+            params = ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v', 'logZ']
         
         # Determine grid size
         n_params = len(params)
@@ -212,7 +213,8 @@ class ConvergenceAnalyzer:
             'k_energy': 'Explosion Energy (10^51 erg)',
             'beta': 'Beta (density profile)',
             'texp': 'Explosion Time (days)',
-            'A_v': 'Extinction A_V (mag)'
+            'A_v': 'Extinction A_V (mag)',
+            'logZ': 'Metallicity (logZ)'
         }
         
         for idx, param in enumerate(params):
@@ -243,8 +245,9 @@ class ConvergenceAnalyzer:
                       alpha=0.5, label=f'Final: {final_value:.3f}')
             
             # Mark 10% tolerance band
-            lower_bound = final_value * 0.9
-            upper_bound = final_value * 1.1
+            tolerance_val = abs(final_value * 0.1)
+            lower_bound = final_value - tolerance_val
+            upper_bound = final_value + tolerance_val
             
             # Identify convergence region (N_90)
             # Find first index where all subsequent values are within 10%
@@ -308,7 +311,7 @@ class ConvergenceAnalyzer:
         report['completeness'] = completeness
         
         # Calculate metrics for key parameters
-        for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v']:
+        for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v', 'logZ']:
             n90 = self.calculate_n90_efficiency(param)
             vol = self.calculate_volatility(param)
             
@@ -360,7 +363,7 @@ def main():
         
         print(f"\n{'N_90 EFFICIENCY (days to 10% convergence)':-^70}")
         print(f"\n{'N_90 EFFICIENCY (days to 10% convergence)':-^70}")
-        for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v']:
+        for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v', 'logZ']:
             n90 = report[f'{param}_n90']
             if n90['convergence_achieved']:
                 print(f"  {param:12} : {n90['n90_days']:6.1f} days (Phase {n90['n90_phase']:.1f}, obs {n90['convergence_index']+1}/{n90['total_observations']})")
@@ -384,7 +387,7 @@ def main():
                 print(f"  ⚠️  WARNING: Light curve may be incomplete - metrics may not reflect true convergence")
         
         print(f"\n{'VOLATILITY (parameter stability)':-^70}")
-        for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v']:
+        for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v', 'logZ']:
             vol = report[f'{param}_volatility']
             if vol.get('volatility_std') is not None:
                 print(f"  {param:12} : σ={vol['volatility_std']:.3f}, "

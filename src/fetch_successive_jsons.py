@@ -76,7 +76,7 @@ class JSONFetcher:
         Get chronological timeline of observations for a specific object.
         
         Returns:
-            DataFrame with columns: date, filter, filepath, Phase, zams, mloss_rate, 56Ni, k_energy, beta, texp, A_v
+            DataFrame with columns: date, filter, filepath, Phase, zams, mloss_rate, 56Ni, k_energy, beta, texp, A_v, logZ
         """
         if object_id not in self.object_index:
             raise ValueError(f"Object {object_id} not found in index")
@@ -109,6 +109,8 @@ class JSONFetcher:
                 'texp_std': params.get('texp', [None, None])[1] if len(params.get('texp', [])) > 1 else None,
                 'A_v': params.get('A_v', [None])[0],
                 'A_v_std': params.get('A_v', [None, None])[1] if len(params.get('A_v', [])) > 1 else None,
+                'logZ': params.get('logZ', [None])[0],
+                'logZ_std': params.get('logZ', [None, None])[1] if len(params.get('logZ', [])) > 1 else None,
             })
         
         return pd.DataFrame(timeline_data)

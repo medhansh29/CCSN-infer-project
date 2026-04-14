@@ -22,6 +22,7 @@ from feature_extractors import (
     PosteriorAnalyzer, MassBudgetExtractor,
     EarlyRiseExcessExtractor, ArrestedCoolingExtractor, PlateauTopographyExtractor
 )
+from multivariate_outliers import MultivariateOutlierDetector
 from alerce_client import AlerceClient
 import json
 from tns_classifier import TNSClassifier, generate_flagged_csv
@@ -102,7 +103,7 @@ def batch_analyze(min_obs: int = 5):
             }
             
             # Add N_90 metrics
-            for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v']:
+            for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v', 'logZ']:
                 n90 = report[f'{param}_n90']
                 row[f'{param}_n90_days'] = n90['n90_days'] if n90['convergence_achieved'] else None
                 row[f'{param}_n90_phase'] = n90['n90_phase'] if n90['convergence_achieved'] else None
@@ -110,7 +111,7 @@ def batch_analyze(min_obs: int = 5):
                 row[f'{param}_final'] = n90['final_value']
             
             # Add volatility metrics
-            for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v']:
+            for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v', 'logZ']:
                 vol = report[f'{param}_volatility']
                 row[f'{param}_volatility_std'] = vol.get('volatility_std')
                 row[f'{param}_volatility_mean_abs'] = vol.get('volatility_mean_abs_change')
@@ -258,11 +259,14 @@ def batch_analyze(min_obs: int = 5):
                     'arrested_cooling_flag': arrested_cooling_res.get('arrested_cooling_flag'),
                     'early_gr_slope': arrested_cooling_res.get('early_gr_slope'),
                     'rebrightening_flag': topography_res.get('rebrightening_flag'),
+                    'rebrightening_prominence': topography_res.get('rebrightening_prominence'),
+                    'rebrightening_width_days': topography_res.get('rebrightening_width_days'),
                     'linear_residual_flag': topography_res.get('linear_residual_flag'),
+                    'linear_residual_max': topography_res.get('linear_residual_max'),
                 })
                 
                 # Add parameter uncertainties (NEW)
-                for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v']:
+                for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v', 'logZ']:
                     if param in final_params:
                         p_vals = final_params[param]
                         if isinstance(p_vals, list) and len(p_vals) >= 3:
@@ -362,11 +366,11 @@ def batch_analyze(min_obs: int = 5):
     convergence_cols += ['num_observations', 'phase_start', 'phase_end',
                          'phase_span', 'date_start', 'date_end']
     # Per-param convergence (n90, converged, final)
-    for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v']:
+    for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v', 'logZ']:
         convergence_cols += [f'{param}_n90_days', f'{param}_n90_phase',
                              f'{param}_converged', f'{param}_final']
     # Per-param volatility
-    for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v']:
+    for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v', 'logZ']:
         convergence_cols += [f'{param}_volatility_std',
                              f'{param}_volatility_mean_abs', f'{param}_max_jump']
     # Residuals and completeness
@@ -386,7 +390,7 @@ def batch_analyze(min_obs: int = 5):
         'rebrightening_flag', 'linear_residual_flag',
         'is_anomaly', 'population_deviation_score'
     ]
-    for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v']:
+    for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v', 'logZ']:
         convergence_cols += [f'{param}_prior_dev', f'{param}_volatility_score']
     
     # Keep only columns that actually exist
@@ -397,11 +401,11 @@ def batch_analyze(min_obs: int = 5):
     
     # --- 2. Uncertainty Metrics CSV ---
     uncertainty_cols = ['object_id']
-    for param in ['zams', 'k_energy', 'mloss_rate', 'beta', '56Ni', 'texp', 'A_v']:
+    for param in ['zams', 'k_energy', 'mloss_rate', 'beta', '56Ni', 'texp', 'A_v', 'logZ']:
         uncertainty_cols += [f'{param}_rel_uncertainty', f'{param}_asymmetry_index']
     uncertainty_cols += ['log_evidence', 'posterior_predictive_spread']
     # Also include final values for context
-    for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v']:
+    for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v', 'logZ']:
         uncertainty_cols.append(f'{param}_final')
     
     uncertainty_cols = [c for c in uncertainty_cols if c in df.columns]
@@ -412,6 +416,21 @@ def batch_analyze(min_obs: int = 5):
     # --- 3. Flagged CSV --- (already generated by generate_flagged_csv above)
     print(f"✅ flagged_non_iip_objects.csv (already generated)")
     
+    # --- 4. 2D Bivariate Outliers ---
+    print("\n🔍 Detecting 2D Bivariate Outliers (Trendline Distances)...")
+    from multivariate_outliers import BivariateOutlierDetector
+    bivariate_outliers_df = BivariateOutlierDetector.detect(df, output_path='data/scatter_outliers.csv')
+    if not bivariate_outliers_df.empty:
+        print(f"✅ Identified {len(bivariate_outliers_df)} 2D outliers.")
+
+    # --- 5. Multivariate Outliers ---
+    print("\n🔍 Detecting Multivariate Physics Clusters (Mahalanobis)...")
+    outliers_df = MultivariateOutlierDetector.detect(df, output_path='data/scatter_outliers.csv')
+    if not outliers_df.empty:
+        print(f"✅ Identified {len(outliers_df)} 3D outliers.")
+    else:
+        print(f"⚠️ No 3D outliers found or insufficient data.")
+        
     return df
 
 
@@ -453,7 +472,7 @@ def print_summary_stats(df: pd.DataFrame):
             print(f"     All statistics are from potentially incomplete light curves")
     
     print(f"\n{'CONVERGENCE RATES':-^70}")
-    for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v']:
+    for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v', 'logZ']:
         converged = df[f'{param}_converged'].sum()
         total = len(df)
         pct = (converged / total) * 100
@@ -467,7 +486,7 @@ def print_summary_stats(df: pd.DataFrame):
             print(f"               Average N_90: {avg_n90:.1f} days (median: {median_n90:.1f})")
     
     print(f"\n{'VOLATILITY STATISTICS':-^70}")
-    for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v']:
+    for param in ['zams', 'mloss_rate', '56Ni', 'k_energy', 'beta', 'texp', 'A_v', 'logZ']:
         vol_std = df[f'{param}_volatility_std'].dropna()
         if len(vol_std) > 0:
             print(f"  {param:12} : mean σ={vol_std.mean():.3f}, "
