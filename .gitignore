@@ -57,6 +57,7 @@ convergence_plots/
 *.jpeg
 *.pdf
 TL;DR_ Report Generation.md
+TL;DR.md
 
 # Data Directories (date-stamped JSON data from REFITT)
 20*/
