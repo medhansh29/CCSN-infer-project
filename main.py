@@ -24,10 +24,10 @@ if src_path not in sys.path:
     sys.path.insert(0, src_path)
 
 # Import consolidated pipeline modules
-from fetch_successive_jsons import JSONFetcher
-from batch_analyze_objects import batch_analyze, print_summary_stats
-from create_summary_plots import create_summary_plots
-from report_generator import generate_report
+from src.fetch_successive_jsons import JSONFetcher
+from src.batch_analyze_objects import batch_analyze, print_summary_stats
+from src.create_summary_plots import create_summary_plots
+from src.report_generator import generate_report
 
 def print_header(text, char='='):
     """Print formatted section header."""
@@ -46,6 +46,8 @@ def main():
                        help='Minimum observations for reliable analysis (default: 12)')
     parser.add_argument('--summary-dir', type=str, default='data/summary_plots',
                        help='Directory for summary plots (default: data/summary_plots)')
+    parser.add_argument('--fix-params', action='store_true',
+                       help='[TEMP FIX] Correct misaligned JSON parameters using samples.txt')
     
     args = parser.parse_args()
     
@@ -55,6 +57,10 @@ def main():
     print_header("REFITT CCSN INFERENCE: UNIFIED PIPELINE")
     print(f"Started at: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Minimum reliable observations: {args.min_obs}")
+    
+    if args.fix_params:
+        from src.fix_json_params import fix_json_parameters
+        fix_json_parameters()
     
     # --- STEP 1: Indexing ---
     print_header("STEP 1: Indexing JSON Outputs", '-')

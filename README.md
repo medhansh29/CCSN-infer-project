@@ -94,6 +94,7 @@ This sequentially executes all pipeline modules:
 | :------------------ | :------------------ | :------------------------------------------------- |
 | `--min-obs N`       | `12`                | Minimum number of observations required per object |
 | `--summary-dir DIR` | `data/summary_plots`| Output directory for batch summary visualizations  |
+| `--fix-params`      | `False`             | [TEMP FIX] Correct misaligned JSON parameters using samples.txt |
 
 ### Examples
 
