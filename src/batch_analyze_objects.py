@@ -23,7 +23,7 @@ from feature_extractors import (
     EarlyRiseExcessExtractor, ArrestedCoolingExtractor, PlateauTopographyExtractor
 )
 from multivariate_outliers import MultivariateOutlierDetector
-from alerce_client import AlerceClient
+from ztf_client import ZTFClient
 import json
 from tns_classifier import TNSClassifier, generate_flagged_csv
 
@@ -57,7 +57,7 @@ def batch_analyze(min_obs: int = 5):
     print(f"  🚩 Flagged {len(flagged_ids)} non-IIP objects (excluded from analysis)")
     # ------------------------------------
     
-    alerce_client = AlerceClient()
+    ztf_client = ZTFClient()
     
     # Process each object
     results = []
@@ -152,8 +152,8 @@ def batch_analyze(min_obs: int = 5):
                     
                 final_params = model_data.get('parameters', {})
                 
-                # Fetch raw lightcurve from ALeRCE
-                raw_df = alerce_client.fetch_lightcurve(obj_id)
+                # Fetch raw lightcurve from ZTF Forced Photometry (if available)
+                raw_df = ztf_client.fetch_lightcurve(obj_id)
                 
                 redshift = None
                 dist_mod = None

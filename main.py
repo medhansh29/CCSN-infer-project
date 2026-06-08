@@ -28,6 +28,7 @@ from src.fetch_successive_jsons import JSONFetcher
 from src.batch_analyze_objects import batch_analyze, print_summary_stats
 from src.create_summary_plots import create_summary_plots
 from src.report_generator import generate_report
+from src.export_static_payloads import export_static_payloads
 
 def print_header(text, char='='):
     """Print formatted section header."""
@@ -116,6 +117,14 @@ def main():
         generate_report()
     except Exception as e:
         err_msg = f"Error generating PDF report: {str(e)}"
+        print(f"❌ {err_msg}")
+        pipeline_errors.append(err_msg)
+        
+    # --- STEP 5: Static Payloads ---
+    try:
+        export_static_payloads()
+    except Exception as e:
+        err_msg = f"Error exporting static payloads: {str(e)}"
         print(f"❌ {err_msg}")
         pipeline_errors.append(err_msg)
     
