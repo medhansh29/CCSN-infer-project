@@ -12,10 +12,11 @@ REFITT produces daily inference outputs for active ZTF transients, each containi
 2. **Filters** out contaminating objects (SN IIn, SN IIb) using official TNS spectroscopic classifications
 3. **Validates** light curve completeness based on the model's Phase parameter
 4. **Computes** convergence metrics (N₉₀, volatility), prediction residuals, and parameter uncertainties
-5. **Detects** bivariate (2D trendline) and multivariate (3D Mahalanobis) parameter outliers
-6. **Generates** per-object trajectory plots, batch summary visualizations, and seaborn corner pairplots
-7. **Detects** mathematical and physical anomalies (ML & Rule-based alerts)
-8. **Compiles** a comprehensive PDF diagnostic report with interactive navigation, model plot links, and actionable review items
+15. **Detects** bivariate (2D trendline) and multivariate (3D Mahalanobis) parameter outliers
+16. **Generates** per-object trajectory plots, batch summary visualizations, and seaborn corner pairplots
+17. **Detects** mathematical and physical anomalies (ML & Rule-based alerts)
+18. **Compiles** a comprehensive PDF diagnostic report with interactive navigation, model plot links, and actionable review items
+19. **Exports** static JSON payloads for the frontend web application (`summary_index.json` and object-specific lightcurve JSONs)
 
 ---
 
@@ -87,6 +88,7 @@ This sequentially executes all pipeline modules:
 2. **Analyze** — TNS classification filtering → light curve completeness → convergence metrics → CSV output
 3. **Visualize** — Generates summary plots from `data/convergence_metrics.csv`
 4. **Diagnostic Report** — Compiles all CSV metrics, plot images, and anomaly flags into a fully interactive PDF at `data/diagnostic_report.pdf`
+5. **Static Payloads** — Exports front-end ready JSON files to `data/static_payloads/`
 
 ### CLI Options
 
@@ -131,10 +133,11 @@ refitt-ccsn-infer/
 │   ├── compare_successive_observations.py # Convergence: N₉₀, volatility, trajectory plots
 │   ├── lightcurve_completeness.py     # LC validation: Phase-based completeness gating
 │   ├── multivariate_outliers.py       # Outlier detection: 2D bivariate + 3D Mahalanobis
-│   ├── alerce_client.py               # Raw data: Fetches ZTF lightcurves via ALeRCE API
+│   ├── ztf_client.py                  # Raw data: Parses local ZTF forced photometry CSVs
 │   ├── tns_classifier.py              # Filtering: TNS spectroscopic classification
 │   ├── create_summary_plots.py        # Visualization: Batch summary + seaborn corner plots
 │   ├── report_generator.py            # Reporting: PDF diagnostic report generator
+│   ├── export_static_payloads.py      # Payload generation: JSON index and lightcurve details
 │   └── templates/
 │       └── report_template.tex        # LaTeX template for the diagnostic PDF
 │
@@ -147,6 +150,10 @@ refitt-ccsn-infer/
 │   ├── diagnostic_report.tex          # OUTPUT: generated LaTeX source
 │   ├── report_images/                 # OUTPUT: per-OID diagnostic packages
 │   │   └── {OID}_{run_date}/          #   Subfolders with plots + raw parameter JSONs
+│   ├── static_payloads/               # OUTPUT: JSON payloads for frontend UI
+│   │   ├── summary_index.json         #   Unified catalog of objects & parameters
+│   │   └── {OID}_lc.json              #   Per-object lightcurves and percentiles
+│   ├── ztf_forced_photometry/         # DATA: Directory for raw ZTF FP CSVs
 │   └── summary_plots/                 # OUTPUT: batch summary visualizations
 │       └── multivariate/              #   Seaborn corner pairplots per physics cluster
 │
@@ -160,7 +167,7 @@ refitt-ccsn-infer/
 
 ## Pipeline Output
 
-The pipeline produces **four primary CSVs**, a PDF report, a diagnostic metadata package, and two optional plot directories.
+The pipeline produces **four primary CSVs**, a PDF report, a diagnostic metadata package, two plot directories, and the static JSON payloads.
 
 ### 1. `convergence_metrics.csv`
 
@@ -172,7 +179,7 @@ The primary output. One row per analyzed object.
 | **Frequency**               | `total_runs`, `avg_interval_days`, `min_interval_days`, `max_interval_days`, `first_run`, `last_run`                        | How often REFITT ran inference on this object             |
 | **Phase**                   | `phase_start`, `phase_end`, `phase_span`                                                                                    | Observation time range (days since explosion)             |
 | **Convergence (×8 params)** | `zams_n90_days`, `zams_converged`, `zams_final`                                                                            | N₉₀: days until parameter stays within 10% of final value        |
-| **Morphological (GP)**     | `M_plateau_25d`, `gp_t_fall`, `gp_t_rise`, `gp_gr_slope`, `plateau_duration_days`                                          | Derived from ALeRCE raw lightcurves                              |
+| **Morphological (GP)**     | `M_plateau_25d`, `gp_t_fall`, `gp_t_rise`, `gp_gr_slope`, `plateau_duration_days`                                          | Derived from raw ZTF forced photometry                            |
 | **Mass & Physics**         | `implied_Mej`, `mass_budget_violation`, `prior_pegged`, `is_bimodal`                                                       | Kinetic energy vs ejecta mass and MCMC posterior diagnostics     |
 | **Precursor Activity**     | `precursor_status`, `precursor_flag`, `precursor_snr_max`                                                                  | Integration across $[-80, -20]$d window                         |
 | **Benchmarking**           | `M_peak_residual`, `plateau_duration_residual`, `is_anomaly`, `population_deviation_score`                                 | Deviation from batch-wide scaling relations and Isolation Forest |
@@ -250,6 +257,12 @@ For each flagged object, the pipeline creates a per-OID subfolder containing:
 
 Subfolder naming convention: `{OID}_{run_date}/` (e.g., `ZTF25abfntiq_2025-11-10/`)
 
+### Static JSON Payloads (`data/static_payloads/`)
+
+The pipeline generates database-free JSON files designed to serve the UI instantly.
+- `summary_index.json`: A single lightweight file caching basic information, inferred parameters, and anomaly metrics for all objects.
+- `[object_id]_lc.json`: Object-specific payloads containing raw observational arrays and the model_fit parameter predictions. The posterior estimates (`mag_arr`) are parsed automatically to calculate the 16th, 50th, and 84th percentiles for the UI.
+
 ### Plot Directories
 
 | Directory             | Contents                                                                                                                                                      |
@@ -313,6 +326,18 @@ Date directories (2025-10-31/, 2025-11-01/, ...)
     │    ├── {OID}_corner.jpg                      │
     │    ├── {OID}_g_nn.json                       │
     │    └── {OID}_r_nn.json                       │
+    └──────────┬───────────────────────────────────┘
+               │
+               ▼
+    ┌──────────────────────────┐
+    │ export_static_payloads   │  Convert CSVs & JSONs to UI format
+    └──────────┬───────────────┘
+               │
+               ▼
+    ┌──────────────────────────────────────────────┐
+    │  data/static_payloads/                       │
+    │    ├── summary_index.json                    │
+    │    ├── {OID}_lc.json                         │
     └──────────────────────────────────────────────┘
 ```
 
@@ -326,7 +351,7 @@ Date directories (2025-10-31/, 2025-11-01/, ...)
 - **Stability**: A parameter is marked as `converged` only if it maintains this threshold for all subsequent observations in the indexed timeline.
 
 ### 2. GP Morphological Features
-Using Gaussian Process (GP) regression on raw ZTF lightcurves fetched via ALeRCE:
+Using Gaussian Process (GP) regression on raw ZTF lightcurves fetched from local forced photometry CSVs:
 - **$M_{\text{plateau, 25d}}$**: The absolute magnitude evaluated exactly 25 days post-explosion ($t_{\exp} + 25$). This specific phase is chosen to avoid the "shock breakout" or early cooling spike (typically 0–10 days) which often contains non-representative physics for standard IIP classification.
 - **$t_{\text{rise}}$ / $t_{\text{fall}}$**: Derived from the first derivative ($\frac{dm}{dt}$) of the GP mean. $t_{\text{fall}}$ corresponds to the epoch of fastest decline, a proxy for the end of the plateau.
 - **Color Evolution ($g-r$ slope)**: The linear slope of the $g-r$ color index between days 25 and 60 post-explosion.
@@ -389,8 +414,11 @@ Dual-mode outlier detector:
 - **`BivariateOutlierDetector`**: Fits OLS trendlines across 4 physics-motivated parameter pairs and flags the top-5 sigma-distance deviations per combination.
 - **`MultivariateOutlierDetector`**: Computes Mahalanobis distances in 5 three-dimensional physics clusters using the inverse covariance matrix, flagging events exceeding the χ²₃ 99th percentile.
 
-### `src/alerce_client.py`
-A robust client for fetching raw ZTF lightcurves from the ALeRCE API. Used by the GP extractions to supplement REFITT's model-processed data with raw observations for accurate morphological analysis.
+### `src/ztf_client.py`
+A client for parsing local ZTF forced photometry CSVs. It gracefully extracts MJD, flux, magnitude and error arrays from the pipeline's localized `data/ztf_forced_photometry/` directory, acting as a standalone replacement for the deprecated ALeRCE API caching component.
+
+### `src/export_static_payloads.py`
+Converts output arrays, classification reports, and inference variables into an index-detail JSON format for instantaneous ingestion by modern web applications. The script handles array mappings and extracts relevant model percentiles directly from multidimensional posterior samples.
 
 ### `src/compare_successive_observations.py`
 Core convergence analyzer. For each object, it:
