@@ -250,14 +250,16 @@ def export_static_payloads(
     
     # Automatically sync to the user portal if it exists
     this_dir = os.path.dirname(os.path.abspath(__file__))
-    portal_dir = os.path.abspath(os.path.join(this_dir, "..", "..", "REFITT-User-Portal"))
-    if os.path.exists(portal_dir):
+    portal_root = os.path.abspath(os.path.join(this_dir, "..", "..", "REFITT-User-Portal"))
+    if os.path.exists(portal_root):
+        portal_data_dir = os.path.join(portal_root, "data")
+        os.makedirs(portal_data_dir, exist_ok=True)
         import shutil
-        print(f"Syncing payloads to user portal at {portal_dir}...")
+        print(f"Syncing payloads to user portal at {portal_data_dir}...")
         for file_name in os.listdir(output_dir):
             if file_name.endswith('.json'):
                 src = os.path.join(output_dir, file_name)
-                dst = os.path.join(portal_dir, file_name)
+                dst = os.path.join(portal_data_dir, file_name)
                 shutil.copy2(src, dst)
         print("✅ Synced to portal successfully.")
 
