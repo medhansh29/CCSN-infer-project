@@ -75,3 +75,4 @@ ZTF*.json
 # OS
 Thumbs.db
 .DS_Store
+data/zfps_registry.json

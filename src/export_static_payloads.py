@@ -1,10 +1,30 @@
 import os
 import json
 import pandas as pd
+import numpy as np
 from pathlib import Path
 from src.fetch_successive_jsons import JSONFetcher
 from src.ztf_client import ZTFClient
-import numpy as np
+
+# Cardelli (1989) extinction coefficients relative to A_v, for R_v = 3.1
+# A_filter = EXT_COEFF[filter] * A_v
+EXT_COEFF = {'g': 1.161, 'r': 0.843, 'i': 0.633}
+
+
+def get_distance_modulus(redshift: float) -> float:
+    """
+    Compute distance modulus for a given redshift using Planck18 cosmology.
+    μ = 5 * log10(d_L / 10 pc)
+    """
+    from astropy.cosmology import Planck18
+    import astropy.units as u
+
+    if redshift is None or redshift <= 0:
+        return 0.0
+
+    d_L_pc = Planck18.luminosity_distance(redshift).to(u.pc).value
+    return 5.0 * np.log10(d_L_pc / 10.0)
+
 
 def export_static_payloads(
     convergence_csv: str = 'data/convergence_metrics.csv',
@@ -147,14 +167,27 @@ def export_static_payloads(
         
         # --- Build LC Payload ---
         observations = []
+        redshift = basic_info.get('redshift')
+        a_v = float(row.get('A_v_final', 0)) if pd.notna(row.get('A_v_final')) else 0.0
+        
+        # Calculate distance modulus once per object
+        mu = get_distance_modulus(redshift)
+
         raw_df = ztf_client.fetch_lightcurve(obj_id)
         if raw_df is not None and not raw_df.empty:
             for _, obs_row in raw_df.iterrows():
+                band = str(obs_row['filter'])
+                app_mag    = float(obs_row['mag'])
+                app_magerr = float(obs_row['magerr'])
+                
+                a_filter = EXT_COEFF.get(band, 0.0) * a_v
+                abs_mag = app_mag - mu - a_filter
+                
                 observations.append({
-                    "mjd": float(obs_row['mjd']),
-                    "mag": float(obs_row['mag']),
-                    "magerr": float(obs_row['magerr']),
-                    "filter": str(obs_row['filter'])
+                    "mjd":    float(obs_row['mjd']),
+                    "mag":    round(abs_mag, 6),
+                    "magerr": round(app_magerr, 6),
+                    "filter": band
                 })
                 
         # Model Fit
@@ -174,12 +207,17 @@ def export_static_payloads(
                     mjd_arr = data.get('mjd_arr', [])
                     mag_arr = data.get('mag_arr', [])
                     if len(mjd_arr) > 0:
+                        a_filter = EXT_COEFF.get(filter_band, 0.0) * a_v
+                        total_correction = mu + a_filter
+                        
                         if len(mag_arr) == 3:
-                            median = mag_arr[0]
-                            upper_16th = mag_arr[1]
-                            lower_84th = mag_arr[2]
+                            # Apply distance modulus + extinction
+                            median = (np.array(mag_arr[0]) - total_correction).tolist()
+                            upper_16th = (np.array(mag_arr[1]) - total_correction).tolist()
+                            lower_84th = (np.array(mag_arr[2]) - total_correction).tolist()
                         elif len(mag_arr) > 3:
-                            mag_arr_np = np.array(mag_arr)
+                            # Apply distance modulus + extinction
+                            mag_arr_np = np.array(mag_arr) - total_correction
                             median = np.percentile(mag_arr_np, 50, axis=0).tolist()
                             upper_16th = np.percentile(mag_arr_np, 16, axis=0).tolist()
                             lower_84th = np.percentile(mag_arr_np, 84, axis=0).tolist()
@@ -209,6 +247,19 @@ def export_static_payloads(
         json.dump(summary_index, f, indent=2)
         
     print(f"✅ Exported {len(summary_index)} object profiles to {output_dir}/")
+    
+    # Automatically sync to the user portal if it exists
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    portal_dir = os.path.abspath(os.path.join(this_dir, "..", "..", "REFITT-User-Portal"))
+    if os.path.exists(portal_dir):
+        import shutil
+        print(f"Syncing payloads to user portal at {portal_dir}...")
+        for file_name in os.listdir(output_dir):
+            if file_name.endswith('.json'):
+                src = os.path.join(output_dir, file_name)
+                dst = os.path.join(portal_dir, file_name)
+                shutil.copy2(src, dst)
+        print("✅ Synced to portal successfully.")
 
 if __name__ == "__main__":
     export_static_payloads()
