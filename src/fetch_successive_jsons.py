@@ -68,8 +68,15 @@ class JSONFetcher:
     
     def load_json_data(self, filepath: str) -> dict:
         """Load and parse a single JSON file."""
-        with open(filepath, 'r') as f:
-            return json.load(f)
+        try:
+            with open(filepath, 'r') as f:
+                return json.load(f)
+        except json.JSONDecodeError as e:
+            print(f"  ⚠️  Skipping invalid/empty JSON file {filepath}: {e}")
+            return {}
+        except Exception as e:
+            print(f"  ⚠️  Error reading file {filepath}: {e}")
+            return {}
     
     def get_object_timeline(self, object_id: str) -> pd.DataFrame:
         """
@@ -86,6 +93,10 @@ class JSONFetcher:
         for date, filter_band, filepath in self.object_index[object_id]:
             data = self.load_json_data(filepath)
             
+            # Skip invalid or empty files
+            if not data:
+                continue
+                
             # Extract key parameters
             params = data.get('parameters', {})
             
