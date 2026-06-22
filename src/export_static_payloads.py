@@ -157,14 +157,6 @@ def export_static_payloads(
             "multivariate_clusters_3d": multivariate_clusters_3d
         }
         
-        summary_entry = {
-            "object_id": obj_id,
-            "basic_info": basic_info,
-            "inferred_parameters": inferred_parameters,
-            "anomalies": anomalies
-        }
-        summary_index.append(summary_entry)
-        
         # --- Build LC Payload ---
         observations = []
         redshift = basic_info.get('redshift')
@@ -239,6 +231,18 @@ def export_static_payloads(
             "model_fit": model_fit
         }
         
+        has_lc = len(observations) > 0 or len(model_fit) > 0
+        
+        summary_entry = {
+            "object_id": obj_id,
+            "basic_info": basic_info,
+            "inferred_parameters": inferred_parameters,
+            "anomalies": anomalies,
+            "has_light_curve": has_lc,
+            "lightcurve": lc_payload
+        }
+        summary_index.append(summary_entry)
+        
         with open(os.path.join(output_dir, f"{obj_id}_lc.json"), 'w') as f:
             json.dump(lc_payload, f, indent=2)
             
@@ -251,8 +255,15 @@ def export_static_payloads(
     # Automatically sync to the user portal if it exists
     this_dir = os.path.dirname(os.path.abspath(__file__))
     portal_root = os.path.abspath(os.path.join(this_dir, "..", "..", "REFITT-User-Portal"))
+    
     if os.path.exists(portal_root):
-        portal_data_dir = os.path.join(portal_root, "data")
+        # Target the Vite public folder if Frontend exists, else fallback
+        frontend_dir = os.path.join(portal_root, "Frontend")
+        if os.path.exists(frontend_dir):
+            portal_data_dir = os.path.join(frontend_dir, "public", "data")
+        else:
+            portal_data_dir = os.path.join(portal_root, "data")
+            
         os.makedirs(portal_data_dir, exist_ok=True)
         import shutil
         print(f"Syncing payloads to user portal at {portal_data_dir}...")
