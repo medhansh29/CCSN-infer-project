@@ -5,6 +5,7 @@ import numpy as np
 from pathlib import Path
 from src.fetch_successive_jsons import JSONFetcher
 from src.ztf_client import ZTFClient
+from src.alerce_client import AlerceClient
 
 # Cardelli (1989) extinction coefficients relative to A_v, for R_v = 3.1
 # A_filter = EXT_COEFF[filter] * A_v
@@ -30,7 +31,8 @@ def export_static_payloads(
     convergence_csv: str = 'data/convergence_metrics.csv',
     outliers_csv: str = 'data/scatter_outliers.csv',
     tns_cache: str = '.tns_cache.json',
-    output_dir: str = 'data/static_payloads'
+    output_dir: str = 'data/static_payloads',
+    use_alerce: bool = False
 ):
     print(f"\n{'='*70}")
     print("STEP 5: Generating Static Payloads")
@@ -63,6 +65,7 @@ def export_static_payloads(
     fetcher = JSONFetcher()
     fetcher.scan_directories()
     ztf_client = ZTFClient()
+    alerce_client = AlerceClient() if use_alerce else None
     
     summary_index = []
     
@@ -80,6 +83,21 @@ def export_static_payloads(
             "plateau_duration_days": float(row.get('plateau_duration_days')) if pd.notna(row.get('plateau_duration_days')) else None
         }
         
+        # Gather JSON params for uncertainties
+        json_params = {}
+        if obj_id in fetcher.object_index:
+            obj_files = fetcher.object_index[obj_id]
+            if len(obj_files) > 0:
+                latest_file = obj_files[-1][2]
+                try:
+                    with open(latest_file, 'r') as f:
+                        data = json.load(f)
+                        if 'parameters' in data:
+                            json_params = data['parameters']
+                except Exception as e:
+                    print(f"Error reading params from {latest_file}: {e}")
+
+        
         # Parse inferred_parameters
         inferred_parameters = {}
         for param in ['zams', 'k_energy', 'mloss_rate', 'beta', '56Ni', 'texp', 'A_v', 'logZ']:
@@ -91,6 +109,23 @@ def export_static_payloads(
                 
             val = row.get(f'{param}_final')
             inferred_parameters[key_in_output] = float(val) if pd.notna(val) else None
+            
+            # calculate percentage uncertainty
+            pct_unc = None
+            pct_plus = None
+            pct_minus = None
+            if param in json_params and val and pd.notna(val):
+                p_data = json_params[param]
+                if len(p_data) == 3:
+                    median_val, err_plus, err_minus = p_data
+                    if abs(median_val) > 1e-6:
+                        pct_unc = ((err_plus + err_minus) / 2.0 / abs(median_val)) * 100.0
+                        pct_plus = (err_plus / abs(median_val)) * 100.0
+                        pct_minus = (err_minus / abs(median_val)) * 100.0
+            inferred_parameters[f"{key_in_output}_pct_uncertainty"] = pct_unc
+            inferred_parameters[f"{key_in_output}_pct_plus"] = pct_plus
+            inferred_parameters[f"{key_in_output}_pct_minus"] = pct_minus
+
             
         # Parse anomalies
         # 1. Morphology
@@ -166,6 +201,9 @@ def export_static_payloads(
         mu = get_distance_modulus(redshift)
 
         raw_df = ztf_client.fetch_lightcurve(obj_id)
+        if (raw_df is None or raw_df.empty) and use_alerce:
+            raw_df = alerce_client.fetch_lightcurve(obj_id)
+            
         if raw_df is not None and not raw_df.empty:
             for _, obs_row in raw_df.iterrows():
                 band = str(obs_row['filter'])
@@ -231,6 +269,39 @@ def export_static_payloads(
             "model_fit": model_fit
         }
         
+        # Calculate reduced chi^2 using observations and the model's 3 measurements (median, upper, lower)
+        chi2 = 0.0
+        n_obs = 0
+        for obs in observations:
+            band = obs['filter']
+            if f"{band}_band" in model_fit:
+                mf = model_fit[f"{band}_band"]
+                mjd_arr = mf['mjd']
+                median_arr = mf['median']
+                upper_arr = mf['upper_16th']
+                lower_arr = mf['lower_84th']
+                
+                obs_mjd = obs['mjd']
+                obs_mag = obs['mag']
+                obs_magerr = obs['magerr']
+                
+                mod_median = np.interp(obs_mjd, mjd_arr, median_arr)
+                mod_upper = np.interp(obs_mjd, mjd_arr, upper_arr)
+                mod_lower = np.interp(obs_mjd, mjd_arr, lower_arr)
+                
+                mod_err = abs(mod_lower - mod_upper) / 2.0
+                total_err = np.sqrt(obs_magerr**2 + mod_err**2)
+                
+                if total_err > 0:
+                    chi2 += ((obs_mag - mod_median) / total_err)**2
+                    n_obs += 1
+                    
+        n_params = 8
+        dof = max(1, n_obs - n_params)
+        reduced_chi2 = chi2 / dof if n_obs > n_params else None
+        inferred_parameters["reduced_chi2"] = reduced_chi2
+
+        
         has_lc = len(observations) > 0 or len(model_fit) > 0
         
         summary_entry = {
@@ -266,13 +337,12 @@ def export_static_payloads(
             
         os.makedirs(portal_data_dir, exist_ok=True)
         import shutil
-        print(f"Syncing payloads to user portal at {portal_data_dir}...")
-        for file_name in os.listdir(output_dir):
-            if file_name.endswith('.json'):
-                src = os.path.join(output_dir, file_name)
-                dst = os.path.join(portal_data_dir, file_name)
-                shutil.copy2(src, dst)
-        print("✅ Synced to portal successfully.")
+        print(f"Syncing summary payload to user portal at {portal_data_dir}...")
+        src = os.path.join(output_dir, "summary_index.json")
+        dst = os.path.join(portal_data_dir, "summary_index.json")
+        if os.path.exists(src):
+            shutil.copy2(src, dst)
+        print("✅ Synced summary to portal successfully.")
 
 if __name__ == "__main__":
     export_static_payloads()

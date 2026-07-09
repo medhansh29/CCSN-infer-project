@@ -49,6 +49,8 @@ def main():
                        help='Directory for summary plots (default: data/summary_plots)')
     parser.add_argument('--fix-params', action='store_true',
                        help='[TEMP FIX] Correct misaligned JSON parameters using samples.txt')
+    parser.add_argument('--fallback-alerce', action='store_true',
+                       help='Use ALeRCE forced photometry as a fallback if ZTF is not available or has issues')
     
     args = parser.parse_args()
     
@@ -76,7 +78,7 @@ def main():
     # --- STEP 2: Batch Analysis ---
     print_header("STEP 2: Physics-Based Batch Analysis", '-')
     try:
-        df = batch_analyze(min_obs=args.min_obs)
+        df = batch_analyze(min_obs=args.min_obs, use_alerce=args.fallback_alerce)
         if len(df) == 0:
             print(f"⚠️ No objects found with {args.min_obs}+ observations.")
             sys.exit(0)
@@ -122,7 +124,7 @@ def main():
         
     # --- STEP 5: Static Payloads ---
     try:
-        export_static_payloads()
+        export_static_payloads(use_alerce=args.fallback_alerce)
     except Exception as e:
         err_msg = f"Error exporting static payloads: {str(e)}"
         print(f"❌ {err_msg}")

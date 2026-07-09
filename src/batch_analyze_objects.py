@@ -24,11 +24,12 @@ from feature_extractors import (
 )
 from multivariate_outliers import MultivariateOutlierDetector
 from ztf_client import ZTFClient
+from alerce_client import AlerceClient
 import json
 from tns_classifier import TNSClassifier, generate_flagged_csv
 
 
-def batch_analyze(min_obs: int = 5):
+def batch_analyze(min_obs: int = 5, use_alerce: bool = False):
     """
     Run convergence analysis on all objects with minimum observations.
     
@@ -58,6 +59,7 @@ def batch_analyze(min_obs: int = 5):
     # ------------------------------------
     
     ztf_client = ZTFClient()
+    alerce_client = AlerceClient() if use_alerce else None
     
     # Process each object
     results = []
@@ -154,6 +156,8 @@ def batch_analyze(min_obs: int = 5):
                 
                 # Fetch raw lightcurve from ZTF Forced Photometry (if available)
                 raw_df = ztf_client.fetch_lightcurve(obj_id)
+                if (raw_df is None or raw_df.empty) and use_alerce:
+                    raw_df = alerce_client.fetch_lightcurve(obj_id)
                 
                 redshift = None
                 dist_mod = None

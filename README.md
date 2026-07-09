@@ -260,7 +260,7 @@ Subfolder naming convention: `{OID}_{run_date}/` (e.g., `ZTF25abfntiq_2025-11-10
 ### Static JSON Payloads (`data/static_payloads/`)
 
 The pipeline generates database-free JSON files designed to serve the UI instantly.
-- `summary_index.json`: A single lightweight file caching basic information, inferred parameters, and anomaly metrics for all objects.
+- `summary_index.json`: A single lightweight file caching basic information, inferred parameters, and anomaly metrics for all objects. It includes recent asymmetric percentage uncertainties (`_pct_plus`, `_pct_minus`) and a full `parameter_history` array to track model parameter convergence over REFITT runs.
 - `[object_id]_lc.json`: Object-specific payloads containing raw observational arrays and the model_fit parameter predictions. The posterior estimates (`mag_arr`) are parsed automatically to calculate the 16th, 50th, and 84th percentiles for the UI.
 
 ### Plot Directories
