@@ -67,13 +67,15 @@ def needs_submission(oid: str, registry: dict) -> tuple[bool, str]:
     return True, f"window elapsed (jd_end={jd_end:.2f} passed {current_jd - jd_end:.1f} days ago)"
 
 
-def record_submission(oid: str, jd_start: float, jd_end: float, registry: dict) -> dict:
+def record_submission(oid: str, ra: float, dec: float, jd_start: float, jd_end: float, registry: dict) -> dict:
     """
     Record a successful ZFPS submission for an OID in the registry.
     Resets download state since this is a new/updated request.
     """
     registry[oid] = {
         "submitted_at": datetime.now(timezone.utc).isoformat(),
+        "ra": round(ra, 7),
+        "dec": round(dec, 7),
         "jd_start": round(jd_start, 4),
         "jd_end": round(jd_end, 4),
         "downloaded": False,

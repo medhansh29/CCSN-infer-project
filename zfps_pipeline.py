@@ -45,23 +45,40 @@ def run_submit(extra_args: list):
     return result.returncode == 0
 
 
+def get_ra_dec_from_zfps_file(filepath):
+    """Extract RA and Dec from the header of a ZFPS file."""
+    ra, dec = None, None
+    try:
+        with open(filepath, 'r') as f:
+            for _ in range(20):
+                line = f.readline()
+                if not line: break
+                if "Requested input R.A." in line:
+                    try: ra = float(line.split('=')[1].split('degrees')[0].strip())
+                    except: pass
+                elif "Requested input Dec." in line:
+                    try: dec = float(line.split('=')[1].split('degrees')[0].strip())
+                    except: pass
+    except Exception as e:
+        print(f"Error reading {filepath}: {e}")
+    return ra, dec
+
 def run_download():
-    """Download completed ZFPS jobs and update the registry."""
+    """Download completed ZFPS jobs and update the registry by matching coordinates."""
     print("\n" + "=" * 60)
     print("STEP 2: DOWNLOADING COMPLETED JOBS")
     print("=" * 60)
 
     client = ZTFClient()
-    downloaded_paths = client.download_pending_lightcurves()
+    client.download_pending_lightcurves() # Best effort download
 
-    # download_pending_lightcurves() returns [] or False when nothing to do
+    import glob
+    downloaded_paths = glob.glob("data/ztf_forced_photometry/batchfp_req*_lc.txt")
+
     if not downloaded_paths:
-        print("No files were downloaded.")
+        print("No ZTF batch request files found locally.")
         return
 
-    # Update registry — ZFPS filenames use batch request IDs (e.g. batchfp_req0004921283_lc.txt),
-    # not OID names, so match by order: each downloaded file covers the pending OIDs from
-    # the same submission batch. Mark pending OIDs as downloaded with the batch file path.
     registry = load_registry()
     pending  = get_pending_downloads(registry)
 
@@ -69,33 +86,83 @@ def run_download():
         print("No OIDs pending in registry — nothing to update.")
         return
 
-    # Associate downloaded files with pending OIDs.
-    # Because ZTF keeps old batch jobs around, `downloaded_paths` may contain
-    # older files. The ZTF batch request IDs are chronological, so sorting
-    # the paths guarantees the newest files are at the end. We take the last N files.
-    downloaded_paths.sort()
-    recent_paths = downloaded_paths[-len(pending):] if len(downloaded_paths) >= len(pending) else downloaded_paths
+    print(f"\nMatching {len(downloaded_paths)} downloaded files to {len(pending)} pending OIDs by coordinates...")
+    
+    # Pre-parse RA/Dec for all downloaded files
+    file_coords = {}
+    for fp in downloaded_paths:
+        ra, dec = get_ra_dec_from_zfps_file(fp)
+        if ra is not None and dec is not None:
+            file_coords[fp] = (ra, dec)
 
-    for i, oid in enumerate(pending):
-        if i < len(recent_paths):
-            file_path = recent_paths[i]
-            old_file_path = registry.get(oid, {}).get("file_path")
+    matched_count = 0
+    for oid in pending:
+        entry = registry.get(oid, {})
+        obj_ra = entry.get("ra")
+        obj_dec = entry.get("dec")
+        
+        if obj_ra is None or obj_dec is None:
+            print(f"  ⚠️  {oid}: Missing RA/Dec in registry, cannot match.")
+            continue
+            
+        candidate_files = []
+        for fp, (file_ra, file_dec) in file_coords.items():
+            dist = (obj_ra - file_ra)**2 + (obj_dec - file_dec)**2
+            if dist < 1e-6:
+                candidate_files.append((fp, dist))
+                
+        import re
+        def extract_req_id(filepath):
+            m = re.search(r'req(\d+)', filepath)
+            return int(m.group(1)) if m else 0
+
+        if candidate_files:
+            # Sort candidates by request ID descending (newest first)
+            candidate_files.sort(key=lambda x: extract_req_id(x[0]), reverse=True)
+            best_file = candidate_files[0][0]
+            best_dist = candidate_files[0][1]
+            
+            old_file_path = entry.get("file_path")
             
             # Clean up the old redundant batch file to save disk space
-            if old_file_path and old_file_path != file_path and os.path.exists(old_file_path):
+            if old_file_path and old_file_path != best_file and os.path.exists(old_file_path):
                 try:
                     os.remove(old_file_path)
                     print(f"  🗑️  Deleted redundant old file: {os.path.basename(old_file_path)}")
                 except Exception as e:
-                    print(f"  ⚠️  Failed to delete old file {old_file_path}: {e}")
+                    pass
 
-            record_download(oid, file_path, registry)
-            print(f"  ✅ {oid} → {os.path.basename(file_path)}")
+            record_download(oid, best_file, registry)
+            print(f"  ✅ {oid:<15} → {os.path.basename(best_file)} (dist: {best_dist**0.5:.6f} deg)")
+            matched_count += 1
+            # Remove from pool so we don't assign it twice if there are very close objects
+            del file_coords[best_file]
         else:
-            print(f"  ⚠️  {oid}: no corresponding download file found")
+            print(f"  ⏳ {oid:<14} : no matching download file found")
 
+    # Clean up unmatched files to keep folder clean and add them to ignore list
+    assigned_files = set()
+    for obj, data in registry.items():
+        if data.get("file_path"):
+            assigned_files.add(data["file_path"])
+
+    ignore_list_path = "data/ztf_forced_photometry/ignore_list.txt"
+    cleaned_count = 0
+    with open(ignore_list_path, 'a') as ignore_f:
+        for f in downloaded_paths:
+            if f not in assigned_files:
+                basename = os.path.basename(f)
+                ignore_f.write(basename + "\n")
+                if os.path.exists(f):
+                    os.remove(f)
+                cleaned_count += 1
+                
+    if cleaned_count > 0:
+        print(f"\nCleaned up {cleaned_count} unmatched files and added to ignore list.")
+
+    print(f"\nRegistry updated: {matched_count} new files matched.")
     save_registry(registry)
-    print("\nRegistry updated with download status.")
+    print("\n✅ ZFPS pipeline complete.")
 
 
 def main():

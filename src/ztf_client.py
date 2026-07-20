@@ -24,7 +24,12 @@ class ZTFClient:
 
         # 1. Check registry first — ZFPS files are named by batch request ID, not OID
         registry = load_registry()
+        reg_jd_start = None
+        reg_jd_end = None
+        
         if ztf_id in registry and registry[ztf_id].get('file_path'):
+            reg_jd_start = registry[ztf_id].get('jd_start')
+            reg_jd_end = registry[ztf_id].get('jd_end')
             candidate = registry[ztf_id]['file_path']
             if os.path.exists(candidate):
                 file_path = candidate
@@ -49,13 +54,24 @@ class ZTFClient:
                 # ZFPS .txt format: header row uses ", " separators, data rows use spaces.
                 # Read header and data separately then merge.
                 header_line = None
+                req_jd_end = None
                 with open(file_path) as f:
                     for line in f:
                         stripped = line.strip()
+                        if line.startswith('# Requested JD end = '):
+                            import re
+                            match = re.search(r'= ([\d\.]+) days', line)
+                            if match: req_jd_end = float(match.group(1))
+                            
                         if stripped.startswith('#') or not stripped:
                             continue
                         header_line = stripped
                         break
+                        
+                # If the file's requested end date misses our SN's actual end date, return None
+                if req_jd_end and reg_jd_end and reg_jd_end > req_jd_end:
+                    print(f"⚠️ [ZTFClient] {ztf_id} file misses tail-end of lightcurve. Falling back to ALeRCE.")
+                    return None
 
                 if header_line is None:
                     return None
@@ -96,25 +112,20 @@ class ZTFClient:
             import numpy as np
             
             if 'jd' in df.columns and 'forcediffimflux' in df.columns:
-                for _, row in df.iterrows():
-                    # diffimgstatus=0 is bad quality data, 1 is good
-                    if 'diffimgstatus' in df.columns and row.get('diffimgstatus', 1) == 0:
-                        continue
-
-                    flux = row.get('forcediffimflux')
-                    fluxerr = row.get('forcediffimfluxunc')
-                    if pd.isna(flux) or pd.isna(fluxerr) or flux <= 0:
-                        continue
-                        
-                    # Calculate AB mag using zpdiff instead of a constant 22.5
-                    zpdiff = row.get('zpdiff', 22.5)
-                    try:
-                        mag = zpdiff - 2.5 * np.log10(flux)
-                        magerr = 1.0857 * (fluxerr / flux)
-                    except:
-                        continue
-                        
-                    fid = row.get('filter')
+                # Filter out sentinel null values (-99999.000)
+                df = df[df['forcediffimflux'] > -90000].copy()
+                
+                if 'diffimgstatus' in df.columns:
+                    df = df[df.get('diffimgstatus', 1) != 0].copy()
+                
+                if 'procstatus' in df.columns:
+                    # '0' indicates nominal processing, anything else is a warning/error code
+                    df = df[df['procstatus'].astype(str).str.strip() == '0'].copy()
+                
+                # We need to process per filter
+                records = []
+                import numpy as np
+                for fid, group in df.groupby('filter'):
                     band = "unknown"
                     if fid == 'ZTF_g': band = "g"
                     elif fid == 'ZTF_r': band = "r"
@@ -122,17 +133,92 @@ class ZTFClient:
                     elif type(fid) == str and 'g' in fid.lower(): band = 'g'
                     elif type(fid) == str and 'r' in fid.lower(): band = 'r'
                     elif type(fid) == str and 'i' in fid.lower(): band = 'i'
+
+                    group = group.copy()
                     
-                    records.append({
-                        "mjd": row['jd'] - 2400000.5,
-                        "mag": mag,
-                        "magerr": magerr,
-                        "filter": band,
-                        "isdiffpos": 1 if flux > 0 else 0
-                    })
+                    # 1. Rescale uncertainties by sqrt(mean(chisq))
+                    if 'forcediffimchisq' in group.columns:
+                        chisq_mean = group['forcediffimchisq'].mean()
+                        if pd.notna(chisq_mean) and chisq_mean > 0:
+                            group['forcediffimfluxunc'] = group['forcediffimfluxunc'] * np.sqrt(chisq_mean)
+                            
+                    # 2. Baseline Calculation & Subtraction
+                    baseline_flux = 0.0
+                    rms_snr = 1.0
                     
+                    if reg_jd_start:
+                        # Baseline epochs are those before the SN start
+                        baseline_mask = group['jd'] < reg_jd_start
+                        if baseline_mask.sum() > 0:
+                            baseline_flux = group.loc[baseline_mask, 'forcediffimflux'].median()
+                            if pd.isna(baseline_flux):
+                                baseline_flux = 0.0
+                                
+                            # Subtract baseline
+                            group['flux_corrected'] = group['forcediffimflux'] - baseline_flux
+                            
+                            # 3. Temporal Systematics Rescaling (RMS of S/N)
+                            snr_baseline = group.loc[baseline_mask, 'flux_corrected'] / group.loc[baseline_mask, 'forcediffimfluxunc']
+                            snr_baseline = snr_baseline.dropna()
+                            if len(snr_baseline) > 1:
+                                p16 = np.percentile(snr_baseline, 16)
+                                p84 = np.percentile(snr_baseline, 84)
+                                rms_snr = 0.5 * (p84 - p16)
+                                if rms_snr <= 0 or pd.isna(rms_snr):
+                                    rms_snr = 1.0
+                                    
+                                # Multiply uncertainties by this RMS
+                                group['forcediffimfluxunc'] = group['forcediffimfluxunc'] * rms_snr
+                        else:
+                            group['flux_corrected'] = group['forcediffimflux']
+                    else:
+                        group['flux_corrected'] = group['forcediffimflux']
+                        
+                    # 4. Magnitude Calculation & Non-Detection Flagging
+                    for _, row in group.iterrows():
+                        flux_corr = row['flux_corrected']
+                        fluxerr = row['forcediffimfluxunc']
+                        zpdiff = row.get('zpdiff', 22.5)
+                        
+                        if pd.isna(flux_corr) or pd.isna(fluxerr) or fluxerr <= 0:
+                            continue
+                            
+                        snr = flux_corr / fluxerr
+                        
+                        if snr >= 3:
+                            try:
+                                mag = zpdiff - 2.5 * np.log10(flux_corr)
+                                magerr = 1.0857 * (fluxerr / flux_corr)
+                                is_ul = False
+                            except:
+                                continue
+                        else:
+                            try:
+                                mag = zpdiff - 2.5 * np.log10(5 * fluxerr)
+                                magerr = None
+                                is_ul = True
+                            except:
+                                continue
+                                
+                        records.append({
+                            "mjd": row['jd'] - 2400000.5,
+                            "mag": mag,
+                            "magerr": magerr,
+                            "filter": band,
+                            "isdiffpos": 1 if flux_corr > 0 else 0,
+                            "is_upperlimit": is_ul
+                        })
+                        
                 if records:
                     mapped_df = pd.DataFrame(records)
+                    
+                    # Trim data using registry bounds to avoid pre-explosion junk data
+                    if reg_jd_start and reg_jd_end:
+                        # mapped_df has 'mjd', registry has 'jd'. Convert for comparison.
+                        mjd_start = reg_jd_start - 2400000.5
+                        mjd_end = reg_jd_end - 2400000.5
+                        mapped_df = mapped_df[(mapped_df['mjd'] >= mjd_start) & (mapped_df['mjd'] <= mjd_end)]
+
                     mapped_df = mapped_df.sort_values(by="mjd").reset_index(drop=True)
                     return mapped_df
             
@@ -225,10 +311,26 @@ class ZTFClient:
         os.makedirs(self.data_dir, exist_ok=True)
 
         downloaded_paths = []
+        ignore_file = os.path.join(self.data_dir, "ignore_list.txt")
+        ignore_set = set()
+        if os.path.exists(ignore_file):
+            with open(ignore_file, 'r') as f:
+                ignore_set = set(line.strip() for line in f)
+
         for lc in lightcurves:
             p = re.match(r'.+/(.+)', lc)
             fileonly = p.group(1)
+            
+            if fileonly in ignore_set:
+                continue
+                
             out_path = os.path.join(self.data_dir, fileonly)
+            
+            # Skip download if the file already exists and is non-empty
+            if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+                downloaded_paths.append(out_path)
+                continue
+                
             command  = f'{curl_base} "{out_path}" "{wget_url}{lc}"'
             print(f"[ZTFClient] Downloading {fileonly}...")
             exit_code = os.system(command)

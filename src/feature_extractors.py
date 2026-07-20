@@ -26,6 +26,14 @@ class GPMorphologicalExtractor:
         result = {'t_fall': None, 'M_plateau_25d': None, 't_rise': None, 'gr_slope': None}
         if raw_df is None or len(raw_df) < 5:
             return result
+            
+        # Filter out upper limits/non-detections as they cannot be used for standard GP fitting
+        if 'is_upperlimit' in raw_df.columns:
+            raw_df = raw_df[~raw_df['is_upperlimit']].copy()
+        raw_df = raw_df.dropna(subset=['mag', 'magerr']).copy()
+        
+        if len(raw_df) < 5:
+            return result
 
         band_counts = raw_df['filter'].value_counts()
         if band_counts.empty: return result

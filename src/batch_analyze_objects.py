@@ -59,7 +59,7 @@ def batch_analyze(min_obs: int = 5, use_alerce: bool = False):
     # ------------------------------------
     
     ztf_client = ZTFClient()
-    alerce_client = AlerceClient() if use_alerce else None
+    alerce_client = AlerceClient()
     
     # Process each object
     results = []
@@ -156,7 +156,7 @@ def batch_analyze(min_obs: int = 5, use_alerce: bool = False):
                 
                 # Fetch raw lightcurve from ZTF Forced Photometry (if available)
                 raw_df = ztf_client.fetch_lightcurve(obj_id)
-                if (raw_df is None or raw_df.empty) and use_alerce:
+                if raw_df is None or raw_df.empty:
                     raw_df = alerce_client.fetch_lightcurve(obj_id)
                 
                 redshift = None

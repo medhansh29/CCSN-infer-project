@@ -44,7 +44,8 @@ from src.zfps_registry import (
 ZFPS_SUBMIT_URL = 'https://ztfweb.ipac.caltech.edu/cgi-bin/batchfp.py/submit'
 ZFPS_AUTH = ('ztffps', 'dontgocrazy!')
 MJD_TO_JD = 2400000.5
-BATCH_SIZE = 1500  # ZTF hard limit per request
+BATCH_SIZE = 1  # ZTF hard limit per request, but we use 1 for tailored JD ranges
+import time
 
 
 def fetch_alerce_data(oid: str):
@@ -213,11 +214,14 @@ def main():
 
         success = submit_batch(ra_list, dec_list, jd_start, jd_end,
                                email, userpass, dry_run=args.dry_run)
+        
+        if not args.dry_run:
+            time.sleep(1)
 
         if success:
             # Write each OID's individual window to the registry
             for oid, ra, dec, js, je in batch:
-                record_submission(oid, js, je, registry)
+                record_submission(oid, ra, dec, js, je, registry)
 
     save_registry(registry)
     print(f"\n✅ Registry updated → {len(submit_targets)} OIDs recorded.")

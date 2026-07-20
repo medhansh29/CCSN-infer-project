@@ -1,5 +1,6 @@
 import os
 import json
+import requests
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -65,9 +66,29 @@ def export_static_payloads(
     fetcher = JSONFetcher()
     fetcher.scan_directories()
     ztf_client = ZTFClient()
-    alerce_client = AlerceClient() if use_alerce else None
+    alerce_client = AlerceClient()
+    
+    # Calculate global statistics for inferred parameters
+    sample_stats = {}
+    for param in ['zams', 'k_energy', 'mloss_rate', 'beta', '56Ni', 'texp', 'A_v', 'logZ']:
+        col_name = f"{param}_final"
+        if col_name in conv_df.columns:
+            sample_stats[param] = {
+                'mean': conv_df[col_name].mean(),
+                'std': conv_df[col_name].std()
+            }
     
     summary_index = []
+    
+    # Load ALeRCE meta cache
+    alerce_meta_cache_file = "data/alerce_meta_cache.json"
+    alerce_meta_cache = {}
+    if os.path.exists(alerce_meta_cache_file):
+        try:
+            with open(alerce_meta_cache_file, "r") as f:
+                alerce_meta_cache = json.load(f)
+        except Exception:
+            pass
     
     for idx, row in conv_df.iterrows():
         obj_id = row['object_id']
@@ -76,11 +97,29 @@ def export_static_payloads(
         tns_info = tns_data.get(obj_id, {})
         redshift = tns_info.get('redshift')
         
+        # Fetch Coordinates from ALeRCE (with cache)
+        ra, dec = None, None
+        if obj_id in alerce_meta_cache:
+            ra = alerce_meta_cache[obj_id].get("meanra")
+            dec = alerce_meta_cache[obj_id].get("meandec")
+        else:
+            try:
+                resp = requests.get(f"https://api.alerce.online/ztf/v1/objects/{obj_id}", timeout=5)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    ra = data.get("meanra")
+                    dec = data.get("meandec")
+                    alerce_meta_cache[obj_id] = {"meanra": ra, "meandec": dec}
+            except Exception as e:
+                print(f"Warning: could not fetch coordinates for {obj_id}: {e}")
+
         # Parse basic_info
         basic_info = {
             "discovery_date": row.get('first_run'),
             "redshift": float(redshift) if redshift and pd.notna(redshift) else None,
-            "plateau_duration_days": float(row.get('plateau_duration_days')) if pd.notna(row.get('plateau_duration_days')) else None
+            "plateau_duration_days": float(row.get('plateau_duration_days')) if pd.notna(row.get('plateau_duration_days')) else None,
+            "ra": float(ra) if ra is not None else None,
+            "dec": float(dec) if dec is not None else None
         }
         
         # Gather JSON params for uncertainties
@@ -109,6 +148,15 @@ def export_static_payloads(
                 
             val = row.get(f'{param}_final')
             inferred_parameters[key_in_output] = float(val) if pd.notna(val) else None
+            
+            # calculate difference from sample in terms of standard deviations
+            z_score = None
+            if pd.notna(val) and param in sample_stats:
+                mean = sample_stats[param]['mean']
+                std = sample_stats[param]['std']
+                if pd.notna(std) and std > 0:
+                    z_score = float((val - mean) / std)
+            inferred_parameters[f"{key_in_output}_zscore"] = z_score
             
             # calculate percentage uncertainty
             pct_unc = None
@@ -201,24 +249,28 @@ def export_static_payloads(
         mu = get_distance_modulus(redshift)
 
         raw_df = ztf_client.fetch_lightcurve(obj_id)
-        if (raw_df is None or raw_df.empty) and use_alerce:
+        if raw_df is None or raw_df.empty:
             raw_df = alerce_client.fetch_lightcurve(obj_id)
             
         if raw_df is not None and not raw_df.empty:
             for _, obs_row in raw_df.iterrows():
                 band = str(obs_row['filter'])
                 app_mag    = float(obs_row['mag'])
-                app_magerr = float(obs_row['magerr'])
+                is_ul = bool(obs_row.get('is_upperlimit', False))
+                app_magerr = obs_row['magerr']
                 
                 a_filter = EXT_COEFF.get(band, 0.0) * a_v
                 abs_mag = app_mag - mu - a_filter
                 
-                observations.append({
+                obs_dict = {
                     "mjd":    float(obs_row['mjd']),
                     "mag":    round(abs_mag, 6),
-                    "magerr": round(app_magerr, 6),
-                    "filter": band
-                })
+                    "magerr": round(float(app_magerr), 6) if pd.notna(app_magerr) else None,
+                    "filter": band,
+                    "is_upperlimit": is_ul
+                }
+                
+                observations.append(obs_dict)
                 
         # Model Fit
         model_fit = {}
@@ -285,6 +337,9 @@ def export_static_payloads(
                 obs_mag = obs['mag']
                 obs_magerr = obs['magerr']
                 
+                if obs_magerr is None or obs.get('is_upperlimit', False):
+                    continue
+                
                 mod_median = np.interp(obs_mjd, mjd_arr, median_arr)
                 mod_upper = np.interp(obs_mjd, mjd_arr, upper_arr)
                 mod_lower = np.interp(obs_mjd, mjd_arr, lower_arr)
@@ -301,6 +356,41 @@ def export_static_payloads(
         reduced_chi2 = chi2 / dof if n_obs > n_params else None
         inferred_parameters["reduced_chi2"] = reduced_chi2
 
+        # Extract Parameter History
+        parameter_history = []
+        if obj_id in fetcher.object_index:
+            for (date_str, filter_band, filepath) in fetcher.object_index[obj_id]:
+                try:
+                    with open(filepath, 'r') as f:
+                        data = json.load(f)
+                    if 'parameters' in data:
+                        params = {}
+                        for p_name, p_data in data['parameters'].items():
+                            if isinstance(p_data, list) and len(p_data) == 3:
+                                median_val, err_plus, err_minus = p_data
+                                pct_plus = (err_plus / abs(median_val)) * 100 if median_val else 0
+                                pct_minus = (err_minus / abs(median_val)) * 100 if median_val else 0
+                                out_name = p_name
+                                if p_name == '56Ni': out_name = 'ni56'
+                                elif p_name == 'texp': out_name = 't_exp'
+                                params[out_name] = {
+                                    "val": median_val,
+                                    "plus": err_plus,
+                                    "minus": err_minus,
+                                    "pct_plus": pct_plus,
+                                    "pct_minus": pct_minus
+                                }
+                        phase = data['parameters'].get('Phase', 0)
+                        if type(phase) is list and len(phase) > 0: phase = phase[0]
+                        parameter_history.append({
+                            "date": date_str,
+                            "filter": filter_band,
+                            "phase": float(phase),
+                            "parameters": params
+                        })
+                except Exception as e:
+                    pass
+
         
         has_lc = len(observations) > 0 or len(model_fit) > 0
         
@@ -310,7 +400,8 @@ def export_static_payloads(
             "inferred_parameters": inferred_parameters,
             "anomalies": anomalies,
             "has_light_curve": has_lc,
-            "lightcurve": lc_payload
+            "lightcurve": lc_payload,
+            "parameter_history": parameter_history
         }
         summary_index.append(summary_entry)
         
@@ -320,6 +411,10 @@ def export_static_payloads(
     # Save summary index
     with open(os.path.join(output_dir, "summary_index.json"), 'w') as f:
         json.dump(summary_index, f, indent=2)
+        
+    # Save ALeRCE meta cache
+    with open(alerce_meta_cache_file, "w") as f:
+        json.dump(alerce_meta_cache, f, indent=2)
         
     print(f"✅ Exported {len(summary_index)} object profiles to {output_dir}/")
     
@@ -345,4 +440,8 @@ def export_static_payloads(
         print("✅ Synced summary to portal successfully.")
 
 if __name__ == "__main__":
-    export_static_payloads()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--fallback-alerce', action='store_true', default=True, help="Use ALeRCE by default when running standalone")
+    args = parser.parse_args()
+    export_static_payloads(use_alerce=args.fallback_alerce)

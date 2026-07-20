@@ -72,6 +72,15 @@ refitt-ccsn-infer/
 
 Each JSON file contains REFITT's posterior parameter estimates for one object in one filter on one date.
 
+### 5. Add ZTF Forced Photometry Data
+
+The pipeline natively parses local ZTF Forced Photometry (ZFPS) files as its primary lightcurve source, falling back to ALeRCE if the ZFPS coverage is truncated. 
+
+1. Place standard ZFPS `.txt` or `.csv` files inside `data/ztf_forced_photometry/`.
+2. The pipeline automatically performs baseline correction (subtracting the median quiescent pre-explosion flux).
+3. The pipeline filters out `-99999` sentinel values and `procstatus != 0` abnormal processing warnings.
+4. It computes formal upper limits for non-detections (SNR < 3) and applies $\chi^2$ uncertainty rescaling.
+
 ---
 
 ## Running the Pipeline
