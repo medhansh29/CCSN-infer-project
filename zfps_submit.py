@@ -48,24 +48,34 @@ BATCH_SIZE = 1  # ZTF hard limit per request, but we use 1 for tailored JD range
 import time
 
 
-def fetch_alerce_data(oid: str):
+def fetch_alerce_data(oid: str, retries=3):
     """Fetch meanra, meandec, firstmjd, and lastmjd from ALeRCE for a given OID."""
     url = f"https://api.alerce.online/ztf/v1/objects/{oid}"
-    try:
-        r = requests.get(url, timeout=10)
-        if r.status_code == 200:
-            data = r.json()
-            return (
-                data.get('meanra'),
-                data.get('meandec'),
-                data.get('firstmjd'),
-                data.get('lastmjd')
-            )
-        print(f"⚠️  ALeRCE {r.status_code} for {oid}")
-        return None, None, None, None
-    except requests.exceptions.RequestException as e:
-        print(f"⚠️  ALeRCE error for {oid}: {e}")
-        return None, None, None, None
+    for attempt in range(retries):
+        try:
+            r = requests.get(url, timeout=15)
+            if r.status_code == 200:
+                data = r.json()
+                return (
+                    data.get('meanra'),
+                    data.get('meandec'),
+                    data.get('firstmjd'),
+                    data.get('lastmjd')
+                )
+            elif r.status_code == 429:
+                # Rate limited
+                time.sleep(5 * (attempt + 1))
+                continue
+            else:
+                print(f"⚠️  ALeRCE {r.status_code} for {oid}")
+                return None, None, None, None
+        except requests.exceptions.RequestException as e:
+            if attempt < retries - 1:
+                time.sleep(3 * (attempt + 1))
+                continue
+            print(f"⚠️  ALeRCE error for {oid}: {e}")
+            return None, None, None, None
+    return None, None, None, None
 
 
 def submit_batch(ra_list, dec_list, jd_start, jd_end, email, userpass, dry_run=False):
@@ -175,6 +185,7 @@ def main():
             continue
 
         ra, dec, firstmjd, lastmjd = fetch_alerce_data(oid)
+        time.sleep(0.2) # Small delay to prevent API throttling
         if ra is None or dec is None or firstmjd is None or lastmjd is None:
             print(f"  ⚠️  {oid}: could not fetch complete ALeRCE data, skipping.")
             continue
