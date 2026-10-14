@@ -61,6 +61,8 @@ TL;DR.md
 
 # Data Directories (date-stamped JSON data from REFITT)
 20*/
+# symlinked run directories (the pattern above only matches real dirs)
+/20[0-9][0-9]-*
 ZTF*.json
 *.id
 *.samples.txt

@@ -452,3 +452,25 @@ The main orchestrator. For each object: loads data via `JSONFetcher`, runs TNS f
 - Add new date directories with REFITT JSONs and re-run to incorporate new observations
 - PDF compilation requires `pdflatex`; the report is compiled twice to resolve cross-references and `longtable` widths
 - All modules are importable: `from src.module import ClassName`
+
+## Paper Figures (personal tool)
+
+`generate_paper_figures.py` is a standalone utility (not part of `main.py`) that restyles existing pipeline output into camera-ready figures. Run it after `main.py` has produced the metrics CSVs:
+
+```bash
+python3 generate_paper_figures.py [--output-dir data/paper_figures]
+```
+
+It only reads `data/convergence_metrics.csv`, `data/uncertainty_metrics.csv`, and `data/scatter_outliers.csv`, and writes PDF + PNG figures plus `captions.md` to the output directory.
+
+## Model-calibration and rise-time figures (personal tools)
+
+Both read the static light-curve payloads in `data/static_payloads/` (written by `main.py` via `export_static_payloads`) and score each detection against the model's 16th-84th percentile band, `z = (obs - model_median) / sqrt(sigma_model^2 + sigma_obs^2)`.
+
+```bash
+python3 src/create_coverage_figures.py   # coverage and misfit vs phase -> data/paper_figures/fig06-08
+python3 src/score_rise_coverage.py       # rise-only score per object  -> data/rise_coverage.csv, data/rise_figures/
+```
+
+`score_rise_coverage.py` scores only the rise (fitted explosion until the model comes within 0.2 mag of its peak, or `--rise-days N`). It flags objects whose rise is poorly fit (median |z| > 1.35, < 50% of points within 1 sigma, or detections before the fitted explosion). It also marks as candidates the flagged objects that have late-time data (>= 3 detections from 50 d on). Each candidate gets a full light-curve plot. Sparse rises (< 3 points) are scored but noted, and objects with no rise detections are listed with a note. Options: `--payload-dir`, `--rise-days`, `--out`, `--fig-dir`.
+
